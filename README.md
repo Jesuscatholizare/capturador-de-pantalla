@@ -2,14 +2,36 @@
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
-## Instalación (Windows 10/11), una sola vez
+## Instalación en Windows 10/11
 
-1. Instala **Python 3.11 o 3.12** desde https://www.python.org/downloads/ y marca la casilla **«Add python.exe to PATH»**.
-2. Descarga el proyecto (en GitHub: botón verde **Code → Download ZIP**) y descomprímelo en una carpeta, por ejemplo `C:\Capturador`.
-3. Haz doble clic en **`crear_portable_windows.bat`**. Tarda unos minutos.
-4. El programa queda en **`dist\Capturador.exe`**. Puedes copiarlo donde quieras: no necesita instalación.
+### 1. Instala Python (una sola vez)
+1. Entra a https://www.python.org/downloads/ y pulsa el botón amarillo **Download Python 3.12** (o la versión que aparezca).
+2. Abre el instalador y, **antes de pulsar «Install Now»**, marca abajo la casilla **«Add python.exe to PATH»**. Si no la marcas, el programa no encontrará Python.
+3. Deja todo lo demás como viene y pulsa **Install Now**.
 
-> Si Windows SmartScreen o el antivirus avisan del `.exe`, es normal en programas que controlan el teclado y el ratón y que no llevan firma digital. Puedes permitirlo, o usar `ejecutar_sin_compilar.bat`, que abre el programa sin crear el `.exe`.
+### 2. Descarga el código
+1. Entra a https://github.com/Jesuscatholizare/capturador-de-pantalla
+2. Pulsa el botón verde **`<> Code`** y luego **Download ZIP**.
+3. En tu carpeta **Descargas**, haz clic derecho sobre `capturador-de-pantalla-main.zip` y elige **Extraer todo…**. Elige una carpeta fácil, por ejemplo `C:\Capturador`.
+
+### 3. Crea el programa (una sola vez)
+1. Abre la carpeta que extrajiste. Dentro hay otra carpeta, `capturador-de-pantalla-main`.
+2. Haz doble clic en **`crear_portable_windows.bat`**.
+   - Si Windows dice «Windows protegió su PC», pulsa **Más información** y luego **Ejecutar de todas formas**.
+3. Se abre una ventana negra que descarga e instala las librerías. Tarda unos 2 a 5 minutos.
+4. Cuando diga **«Listo: dist\Capturador.exe»**, pulsa una tecla para cerrarla.
+
+### 4. Abre el programa
+- Entra a la carpeta **`dist`** y haz doble clic en **`Capturador.exe`**.
+- Puedes copiar ese archivo al Escritorio o a una memoria USB: funciona solo, sin el resto de la carpeta.
+- Si el antivirus lo bloquea, es porque el programa controla el teclado y el ratón y no lleva firma digital. Puedes permitirlo, o abrir el programa con **`ejecutar_sin_compilar.bat`**, que hace lo mismo sin crear el `.exe`.
+
+### 5. Primera prueba
+1. En la pestaña **3. Imágenes**, elige la carpeta donde se guardarán las capturas y pulsa **Probar una captura**.
+2. En **1. Grabar**, pulsa **● Grabar** y haz un clic en «página siguiente» de cualquier documento. Luego pulsa **F9** para terminar.
+3. En **2. Repetir y capturar**, pon **5** repeticiones y pulsa **▶ Iniciar**. No toques el ratón mientras trabaja.
+
+> Si en la ventana negra del paso 3 aparece un error, copia el texto completo: con él se puede encontrar la causa.
 
 ## Uso paso a paso
 
