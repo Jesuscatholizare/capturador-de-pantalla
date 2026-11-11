@@ -1,0 +1,1 @@
+# capturador-de-pantalla
