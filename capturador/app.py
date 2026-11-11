@@ -1,0 +1,747 @@
+"""Interfaz gráfica (tkinter) del Capturador."""
+import json
+import queue
+import sys
+import threading
+import tkinter as tk
+from dataclasses import asdict, fields
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from . import capturas, estado, macro as macros, pdfs, teclas
+from .motor import Config, Motor, capturas_por_repeticion
+
+VERSION = "1.0.0"
+ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
+CUENTA_ATRAS = 3
+
+MODOS = [("Una captura al final de cada repetición", "final"),
+         ("En las marcas (F8) que pusiste al grabar", "marcas"),
+         ("Ambos: en las marcas y al final", "ambos")]
+POLITICAS = [("Preguntarme qué hacer", "preguntar"),
+             ("Guardarla igual y anotarlo en el registro", "guardar"),
+             ("Detener (luego se reanuda en esa captura)", "detener")]
+
+
+def pitido(frecuencia=1000, ms=120):
+    if sys.platform == "win32":
+        try:
+            import winsound
+            winsound.Beep(frecuencia, ms)
+        except Exception:
+            pass
+
+
+class App:
+    def __init__(self, raiz):
+        self.raiz = raiz
+        raiz.title(f"Capturador {VERSION}")
+        raiz.minsize(640, 600)
+        self.cola = queue.Queue()
+        self.macro = macros.nueva_macro()
+        self.ruta_macro = None
+        self.motor = None
+        self.grabador = None
+        self.oyente_atajos = None
+        self.ultimo_progreso = 0
+
+        self._variables()
+        self._construir()
+        self._cargar_config()
+        self._actualizar_resumen()
+        raiz.protocol("WM_DELETE_WINDOW", self._cerrar)
+        raiz.after(100, self._atender_cola)
+
+    # ------------------------------------------------------------------
+    # Variables y persistencia
+    # ------------------------------------------------------------------
+    def _variables(self):
+        S, B = tk.StringVar, tk.BooleanVar
+        self.v = {
+            "carpeta": S(value=str(Path.home() / "Capturas")),
+            "repeticiones": S(value="10"),
+            "modo": S(value="final"),
+            "espera_captura_ms": S(value="800"),
+            "velocidad": S(value="1.0"),
+            "pausa_entre_reps_ms": S(value="0"),
+            "inicio": S(value="1"),
+            "prefijo": S(value="captura"),
+            "formato": S(value="png"),
+            "reintentos": S(value="3"),
+            "espera_reintento_ms": S(value="1500"),
+            "rechazar_vacia": B(value=True),
+            "rechazar_igual": B(value=True),
+            "umbral_cambio": S(value="0.5"),
+            "politica": S(value="preguntar"),
+            "espera_reanudar_ms": S(value="1500"),
+        }
+        self.v_monitor = S(value="1")
+        self.v_region = S(value="")
+        self.v_por_pdf = S(value="30")
+        self.v_pdf_al_final = B(value=True)
+        self.v_recapturar = S(value="")
+
+    def _cargar_config(self):
+        try:
+            datos = json.loads(ARCHIVO_CONFIG.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        for clave, var in self.v.items():
+            if clave in datos:
+                var.set(datos[clave])
+        for clave, var in (("monitor", self.v_monitor), ("region", self.v_region),
+                           ("por_pdf", self.v_por_pdf), ("pdf_al_final", self.v_pdf_al_final)):
+            if clave in datos:
+                var.set(datos[clave])
+        ruta = datos.get("ruta_macro")
+        if ruta and Path(ruta).exists():
+            try:
+                self.macro = macros.cargar(ruta)
+                self.ruta_macro = ruta
+            except Exception:
+                pass
+
+    def _guardar_config(self):
+        datos = {k: v.get() for k, v in self.v.items()}
+        datos.update(monitor=self.v_monitor.get(), region=self.v_region.get(),
+                     por_pdf=self.v_por_pdf.get(), pdf_al_final=self.v_pdf_al_final.get(),
+                     ruta_macro=self.ruta_macro)
+        try:
+            ARCHIVO_CONFIG.write_text(json.dumps(datos, ensure_ascii=False, indent=1),
+                                      encoding="utf-8")
+        except OSError:
+            pass
+
+    def _leer_config(self):
+        """Convierte los campos en un Config; lanza ValueError con un mensaje claro."""
+        tipos = {f.name: f.type for f in fields(Config)}
+        valores = {}
+        for clave, var in self.v.items():
+            bruto = var.get()
+            tipo = tipos[clave]
+            try:
+                if tipo in (int, "int"):
+                    valores[clave] = int(str(bruto).strip())
+                elif tipo in (float, "float"):
+                    valores[clave] = float(str(bruto).strip().replace(",", "."))
+                elif tipo in (bool, "bool"):
+                    valores[clave] = bool(bruto)
+                else:
+                    valores[clave] = str(bruto).strip()
+            except ValueError:
+                raise ValueError(f"El campo «{clave}» tiene un valor no válido: {bruto!r}")
+        if not valores["carpeta"]:
+            raise ValueError("Elige la carpeta donde se guardarán las imágenes.")
+        if valores["reintentos"] < 0:
+            raise ValueError("Los reintentos no pueden ser negativos.")
+        return Config(**valores)
+
+    def _leer_region(self):
+        texto = self.v_region.get().strip()
+        if not texto:
+            return None
+        partes = [int(p) for p in texto.replace(";", ",").split(",")]
+        if len(partes) != 4 or partes[2] <= 0 or partes[3] <= 0:
+            raise ValueError("La región debe ser: x, y, ancho, alto")
+        return tuple(partes)
+
+    # ------------------------------------------------------------------
+    # Construcción de la ventana
+    # ------------------------------------------------------------------
+    def _construir(self):
+        marco = ttk.Frame(self.raiz, padding=10)
+        marco.pack(fill="both", expand=True)
+        cuaderno = ttk.Notebook(marco)
+        cuaderno.pack(fill="x")
+
+        # 1. Grabar
+        p = ttk.Frame(cuaderno, padding=10)
+        cuaderno.add(p, text="1. Grabar")
+        ttk.Label(p, wraplength=560, justify="left", text=(
+            "Pulsa «Grabar». La ventana se minimiza y, tras 3 segundos, se graban tu "
+            "ratón y tu teclado.\n"
+            "  • F8 = marcar aquí una captura (si quieres varias por repetición)\n"
+            "  • F9 = terminar la grabación\n"
+            "Graba UNA sola vuelta (p. ej.: capturar la página y pasar a la siguiente).")
+        ).pack(anchor="w")
+        fila = ttk.Frame(p)
+        fila.pack(anchor="w", pady=8)
+        self.btn_grabar = ttk.Button(fila, text="● Grabar", command=self.grabar)
+        self.btn_grabar.pack(side="left")
+        ttk.Button(fila, text="Abrir macro…", command=self.abrir_macro).pack(side="left", padx=6)
+        ttk.Button(fila, text="Guardar macro…", command=self.guardar_macro).pack(side="left")
+        self.lbl_macro = ttk.Label(p, text="", foreground="#1a5")
+        self.lbl_macro.pack(anchor="w")
+
+        # 2. Repetir
+        p = ttk.Frame(cuaderno, padding=10)
+        cuaderno.add(p, text="2. Repetir y capturar")
+        self._campo(p, 0, "Repeticiones:", self.v["repeticiones"])
+        ttk.Label(p, text="¿Cuándo capturar?").grid(row=1, column=0, sticky="nw", pady=(6, 0))
+        caja = ttk.Frame(p)
+        caja.grid(row=1, column=1, columnspan=3, sticky="w", pady=(6, 0))
+        for texto, valor in MODOS:
+            ttk.Radiobutton(caja, text=texto, value=valor, variable=self.v["modo"],
+                            command=self._actualizar_resumen).pack(anchor="w")
+        self._campo(p, 2, "Espera antes de capturar (ms):", self.v["espera_captura_ms"])
+        self._campo(p, 3, "Velocidad (1 = igual que lo grabado):", self.v["velocidad"])
+        self._campo(p, 4, "Pausa entre repeticiones (ms):", self.v["pausa_entre_reps_ms"])
+        self._campo(p, 5, "Empezar en la captura nº:", self.v["inicio"])
+        ttk.Button(p, text="Continuar donde se quedó", command=self.continuar_donde_quedo
+                   ).grid(row=5, column=2, sticky="w", padx=6)
+        self.lbl_total = ttk.Label(p, text="", foreground="#1a5")
+        self.lbl_total.grid(row=6, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        for var in (self.v["repeticiones"], self.v["inicio"]):
+            var.trace_add("write", lambda *a: self._actualizar_resumen())
+
+        # 3. Imágenes
+        p = ttk.Frame(cuaderno, padding=10)
+        cuaderno.add(p, text="3. Imágenes")
+        ttk.Label(p, text="Carpeta:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(p, textvariable=self.v["carpeta"], width=48).grid(row=0, column=1, columnspan=2, sticky="we")
+        ttk.Button(p, text="Elegir…", command=self.elegir_carpeta).grid(row=0, column=3, padx=4)
+        self._campo(p, 1, "Nombre de archivo:", self.v["prefijo"])
+        ttk.Label(p, text="(captura_00001.png, captura_00002.png…)").grid(row=1, column=2, sticky="w")
+        ttk.Label(p, text="Formato:").grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Combobox(p, textvariable=self.v["formato"], values=["png", "jpg"], width=8,
+                     state="readonly").grid(row=2, column=1, sticky="w")
+        self._campo(p, 3, "Monitor (1 = principal, 0 = todos):", self.v_monitor)
+        ttk.Label(p, text="Región (x, y, ancho, alto):").grid(row=4, column=0, sticky="w", pady=3)
+        ttk.Entry(p, textvariable=self.v_region, width=22).grid(row=4, column=1, sticky="w")
+        fila = ttk.Frame(p)
+        fila.grid(row=4, column=2, columnspan=2, sticky="w")
+        ttk.Button(fila, text="Seleccionar con el ratón", command=self.seleccionar_region).pack(side="left")
+        ttk.Button(fila, text="Pantalla completa", command=lambda: self.v_region.set("")).pack(side="left", padx=4)
+        ttk.Button(p, text="Probar una captura", command=self.probar_captura).grid(row=5, column=0, sticky="w", pady=8)
+
+        # 4. Errores
+        p = ttk.Frame(cuaderno, padding=10)
+        cuaderno.add(p, text="4. Si algo falla")
+        ttk.Checkbutton(p, text="Rechazar imágenes vacías (todo negro, todo blanco…)",
+                        variable=self.v["rechazar_vacia"]).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(p, text="Rechazar si es igual a la anterior (la página no cambió)",
+                        variable=self.v["rechazar_igual"]).grid(row=1, column=0, columnspan=3, sticky="w")
+        self._campo(p, 2, "Mínimo que debe cambiar (% de píxeles):", self.v["umbral_cambio"])
+        self._campo(p, 3, "Reintentos de cada captura:", self.v["reintentos"])
+        self._campo(p, 4, "Espera entre reintentos (ms):", self.v["espera_reintento_ms"])
+        self._campo(p, 5, "Margen al reanudar (ms):", self.v["espera_reanudar_ms"])
+        ttk.Label(p, text="Si después de reintentar sigue fallando:").grid(row=6, column=0, sticky="nw", pady=(6, 0))
+        caja = ttk.Frame(p)
+        caja.grid(row=6, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        for texto, valor in POLITICAS:
+            ttk.Radiobutton(caja, text=texto, value=valor, variable=self.v["politica"]).pack(anchor="w")
+        ttk.Label(p, foreground="#555", wraplength=560, justify="left", text=(
+            "Todo fallo queda en registro.csv y el avance en progreso.json, dentro de la carpeta. "
+            "Si se detiene en la captura 154, «Continuar donde se quedó» empieza en la 154 sin "
+            "tocar las anteriores.")).grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        # 5. PDF
+        p = ttk.Frame(cuaderno, padding=10)
+        cuaderno.add(p, text="5. PDF")
+        self._campo(p, 0, "Imágenes por PDF:", self.v_por_pdf)
+        ttk.Checkbutton(p, text="Crear los PDF automáticamente al terminar",
+                        variable=self.v_pdf_al_final).grid(row=1, column=0, columnspan=3, sticky="w")
+        ttk.Button(p, text="Crear PDF ahora con la carpeta…", command=self.crear_pdfs_ahora
+                   ).grid(row=2, column=0, sticky="w", pady=8)
+        ttk.Label(p, foreground="#555", text="Se guardan en la subcarpeta PDF; el último lleva las que sobren."
+                  ).grid(row=3, column=0, columnspan=3, sticky="w")
+
+        # Controles de ejecución
+        ctl = ttk.LabelFrame(marco, text="Ejecución", padding=8)
+        ctl.pack(fill="x", pady=(10, 0))
+        fila = ttk.Frame(ctl)
+        fila.pack(fill="x")
+        self.btn_iniciar = ttk.Button(fila, text="▶ Iniciar", command=self.iniciar)
+        self.btn_iniciar.pack(side="left")
+        self.btn_pausa = ttk.Button(fila, text="⏸ Pausar (F9)", command=self.alternar_pausa, state="disabled")
+        self.btn_pausa.pack(side="left", padx=6)
+        self.btn_detener = ttk.Button(fila, text="■ Detener (F10)", command=self.detener, state="disabled")
+        self.btn_detener.pack(side="left")
+        self.marco_pausa = ttk.Frame(ctl)
+        ttk.Label(self.marco_pausa, text="En pausa. Rehacer la captura nº").pack(side="left")
+        ttk.Entry(self.marco_pausa, textvariable=self.v_recapturar, width=7).pack(side="left", padx=4)
+        ttk.Button(self.marco_pausa, text="Recapturar ahora", command=self.recapturar).pack(side="left")
+        ttk.Label(self.marco_pausa, foreground="#555",
+                  text="  (pon antes en pantalla lo que corresponde)").pack(side="left")
+        self.barra = ttk.Progressbar(ctl, mode="determinate")
+        self.barra.pack(fill="x", pady=6)
+        self.lbl_estado = ttk.Label(ctl, text="Listo.")
+        self.lbl_estado.pack(anchor="w")
+
+        reg = ttk.LabelFrame(marco, text="Registro", padding=4)
+        reg.pack(fill="both", expand=True, pady=(8, 0))
+        self.txt = tk.Text(reg, height=9, wrap="word", state="disabled")
+        barra = ttk.Scrollbar(reg, command=self.txt.yview)
+        self.txt.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        self.txt.pack(fill="both", expand=True)
+
+    def _campo(self, padre, fila, etiqueta, var, ancho=10):
+        ttk.Label(padre, text=etiqueta).grid(row=fila, column=0, sticky="w", pady=3)
+        ttk.Entry(padre, textvariable=var, width=ancho).grid(row=fila, column=1, sticky="w", pady=3)
+
+    # ------------------------------------------------------------------
+    # Utilidades de interfaz
+    # ------------------------------------------------------------------
+    def log(self, texto):
+        self.txt.configure(state="normal")
+        self.txt.insert("end", texto + "\n")
+        self.txt.see("end")
+        self.txt.configure(state="disabled")
+
+    def _actualizar_resumen(self):
+        hay = bool(self.macro["eventos"])
+        nombre = f" — {Path(self.ruta_macro).name}" if self.ruta_macro else ""
+        self.lbl_macro.configure(text=("Macro: " + macros.texto_resumen(self.macro) + nombre)
+                                 if hay else "Todavía no hay macro grabada.")
+        try:
+            cpr = capturas_por_repeticion(self.macro, self.v["modo"].get())
+            reps = int(self.v["repeticiones"].get())
+            self.lbl_total.configure(
+                text=f"{cpr} captura(s) por repetición × {reps} = {cpr * reps} imágenes", foreground="#1a5")
+        except ValueError as e:
+            self.lbl_total.configure(text=str(e), foreground="#b30")
+
+    def _modo_ejecucion(self, activo):
+        self.btn_iniciar.configure(state="disabled" if activo else "normal")
+        self.btn_grabar.configure(state="disabled" if activo else "normal")
+        self.btn_pausa.configure(state="normal" if activo else "disabled", text="⏸ Pausar (F9)")
+        self.btn_detener.configure(state="normal" if activo else "disabled")
+        if not activo:
+            self.marco_pausa.pack_forget()
+
+    def _mostrar(self):
+        self.raiz.deiconify()
+        self.raiz.lift()
+        self.raiz.attributes("-topmost", True)
+        self.raiz.after(300, lambda: self.raiz.attributes("-topmost", False))
+        self.raiz.focus_force()
+
+    def _cuenta_atras(self, segundos, accion, texto):
+        if segundos <= 0:
+            self.raiz.iconify()
+            self.raiz.after(700, accion)
+            return
+        self.lbl_estado.configure(text=f"{texto} en {segundos}…")
+        self.raiz.after(1000, lambda: self._cuenta_atras(segundos - 1, accion, texto))
+
+    # ------------------------------------------------------------------
+    # Grabación
+    # ------------------------------------------------------------------
+    def grabar(self):
+        if self.macro["eventos"] and not messagebox.askyesno(
+                "Grabar", "Ya hay una macro. ¿Reemplazarla por una nueva grabación?"):
+            return
+        self.log("Grabación: prepara la pantalla. F8 = marca de captura, F9 = terminar.")
+        self._cuenta_atras(CUENTA_ATRAS, self._empezar_grabacion, "Grabando")
+
+    def _empezar_grabacion(self):
+        from .grabador import Grabador
+        self.grabador = Grabador(
+            al_terminar=lambda m: self.cola.put(("grabacion_fin", m)),
+            al_marcar=lambda: (pitido(1500, 80), self.cola.put(("marca", None))))
+        try:
+            self.grabador.iniciar()
+        except Exception as e:
+            self._mostrar()
+            messagebox.showerror("Grabar", f"No se pudo iniciar la grabación:\n{e}")
+            return
+        pitido(800, 150)
+
+    # ------------------------------------------------------------------
+    # Archivos de macro
+    # ------------------------------------------------------------------
+    def abrir_macro(self):
+        ruta = filedialog.askopenfilename(filetypes=[("Macro", "*.json"), ("Todos", "*.*")])
+        if not ruta:
+            return
+        try:
+            self.macro = macros.cargar(ruta)
+            self.ruta_macro = ruta
+        except Exception as e:
+            messagebox.showerror("Abrir macro", str(e))
+            return
+        self._actualizar_resumen()
+        self.log(f"Macro abierta: {ruta}")
+
+    def guardar_macro(self):
+        if not self.macro["eventos"]:
+            messagebox.showinfo("Guardar macro", "No hay nada grabado todavía.")
+            return
+        ruta = filedialog.asksaveasfilename(defaultextension=".json",
+                                            filetypes=[("Macro", "*.json")])
+        if not ruta:
+            return
+        macros.guardar(self.macro, ruta)
+        self.ruta_macro = ruta
+        self._actualizar_resumen()
+        self.log(f"Macro guardada: {ruta}")
+
+    # ------------------------------------------------------------------
+    # Imágenes
+    # ------------------------------------------------------------------
+    def elegir_carpeta(self):
+        ruta = filedialog.askdirectory(initialdir=self.v["carpeta"].get() or str(Path.home()))
+        if ruta:
+            self.v["carpeta"].set(ruta)
+
+    def _funcion_captura(self):
+        region = self._leer_region()
+        monitor = int(self.v_monitor.get())
+        return lambda: capturas.tomar_captura(monitor, region)
+
+    def probar_captura(self):
+        try:
+            captura = self._funcion_captura()
+            self.raiz.iconify()
+            self.raiz.update()
+            self.raiz.after(800, lambda: self._probar(captura))
+        except Exception as e:
+            messagebox.showerror("Probar captura", str(e))
+
+    def _probar(self, captura):
+        try:
+            img = captura()
+            carpeta = Path(self.v["carpeta"].get())
+            carpeta.mkdir(parents=True, exist_ok=True)
+            ruta = carpeta / "prueba.png"
+            capturas.guardar(img, ruta)
+            motivo = capturas.motivo_rechazo(img)
+            self._mostrar()
+            self.log(f"Prueba: {img.size[0]}×{img.size[1]} px → {ruta}"
+                     + (f" (aviso: {motivo})" if motivo else ""))
+        except Exception as e:
+            self._mostrar()
+            messagebox.showerror("Probar captura", str(e))
+
+    def seleccionar_region(self):
+        try:
+            import mss
+            with mss.mss() as sct:
+                todo = sct.monitors[0]
+        except Exception as e:
+            messagebox.showerror("Región", str(e))
+            return
+        self.raiz.iconify()
+        capa = tk.Toplevel(self.raiz)
+        capa.overrideredirect(True)
+        capa.geometry(f"{todo['width']}x{todo['height']}+{todo['left']}+{todo['top']}")
+        capa.attributes("-alpha", 0.3)
+        capa.attributes("-topmost", True)
+        lienzo = tk.Canvas(capa, cursor="cross", bg="gray20", highlightthickness=0)
+        lienzo.pack(fill="both", expand=True)
+        lienzo.create_text(todo["width"] // 2, 40, fill="white", font=("Segoe UI", 18),
+                           text="Arrastra para marcar la zona. Esc para cancelar.")
+        inicio = {}
+
+        def pulsar(e):
+            inicio.update(x=e.x_root, y=e.y_root, cx=e.x, cy=e.y)
+            inicio["rect"] = lienzo.create_rectangle(e.x, e.y, e.x, e.y, outline="red", width=3)
+
+        def arrastrar(e):
+            if "rect" in inicio:
+                lienzo.coords(inicio["rect"], inicio["cx"], inicio["cy"], e.x, e.y)
+
+        def soltar(e):
+            if "x" not in inicio:
+                return
+            x0, x1 = sorted((inicio["x"], e.x_root))
+            y0, y1 = sorted((inicio["y"], e.y_root))
+            capa.destroy()
+            self._mostrar()
+            if x1 - x0 > 5 and y1 - y0 > 5:
+                self.v_region.set(f"{x0}, {y0}, {x1 - x0}, {y1 - y0}")
+                self.log(f"Región: x={x0} y={y0} ancho={x1 - x0} alto={y1 - y0}")
+
+        def cancelar(_e=None):
+            capa.destroy()
+            self._mostrar()
+
+        lienzo.bind("<ButtonPress-1>", pulsar)
+        lienzo.bind("<B1-Motion>", arrastrar)
+        lienzo.bind("<ButtonRelease-1>", soltar)
+        capa.bind("<Escape>", cancelar)
+        capa.focus_force()
+
+    # ------------------------------------------------------------------
+    # Ejecución
+    # ------------------------------------------------------------------
+    def continuar_donde_quedo(self):
+        prog = estado.cargar_progreso(self.v["carpeta"].get())
+        if not prog or not prog.get("siguiente"):
+            messagebox.showinfo("Continuar", "No hay progreso guardado en esa carpeta.")
+            return
+        cfg = prog.get("config", {})
+        for clave in ("repeticiones", "modo", "prefijo", "formato"):
+            if clave in cfg:
+                self.v[clave].set(cfg[clave])
+        self.v["inicio"].set(str(prog["siguiente"]))
+        self.log(f"Progreso encontrado ({prog.get('estado')}, {prog.get('actualizado')}): "
+                 f"última guardada {prog.get('ultima_guardada')}, se seguirá en la "
+                 f"{prog['siguiente']} de {prog.get('total_capturas')}.")
+        self.log("Antes de iniciar, deja en pantalla lo que corresponde a esa captura.")
+
+    def iniciar(self):
+        if not self.macro["eventos"]:
+            messagebox.showwarning("Iniciar", "Primero graba (o abre) una macro.")
+            return
+        try:
+            cfg = self._leer_config()
+            captura = self._funcion_captura()
+            int(self.v_por_pdf.get())
+            from .reproductor import ReproductorPynput
+            motor = Motor(self.macro, cfg, ReproductorPynput(), captura,
+                          notificar=lambda t, d: self.cola.put(("motor", (t, d))),
+                          preguntar=self._preguntar_desde_hilo)
+        except Exception as e:
+            messagebox.showerror("Iniciar", str(e))
+            return
+        primera = ((max(1, cfg.inicio) - 1) // motor.cpr) * motor.cpr + 1
+        existentes = [n for n in range(primera, motor.total + 1) if motor.ruta(n).exists()]
+        if existentes and not messagebox.askyesno(
+                "Iniciar", f"Ya hay {len(existentes)} imagen(es) desde la nº {existentes[0]} "
+                           "que se van a reemplazar. ¿Continuar?"):
+            return
+        self._guardar_config()
+        self.motor = motor
+        self.barra.configure(maximum=motor.total, value=primera - 1)
+        self._modo_ejecucion(True)
+        self.log(f"Inicio: {motor.total} capturas en total, empezando en la {primera}. "
+                 "F9 = pausa, F10 = detener.")
+        self._cuenta_atras(CUENTA_ATRAS, self._lanzar, "Empieza")
+
+    def _lanzar(self):
+        from pynput import keyboard
+
+        def atajo(key):
+            nombre = teclas.nombre_especial(key)
+            if nombre == teclas.TECLA_PAUSA:
+                self.cola.put(("atajo", "pausa"))
+            elif nombre == teclas.TECLA_DETENER:
+                self.cola.put(("atajo", "detener"))
+
+        self.oyente_atajos = keyboard.Listener(on_press=atajo)
+        self.oyente_atajos.start()
+        threading.Thread(target=self._hilo_motor, daemon=True).start()
+
+    def _hilo_motor(self):
+        try:
+            self.motor.ejecutar()
+        except Exception as e:  # error inesperado: se informa y se libera la interfaz
+            self.cola.put(("motor", ("fin", {"estado": "error", "mensaje": str(e)})))
+
+    def alternar_pausa(self):
+        if self.motor:
+            self.motor.alternar_pausa()
+            if not self.motor.en_pausa():
+                self.marco_pausa.pack_forget()
+                self.raiz.iconify()
+            else:
+                self.lbl_estado.configure(text="Pausando en cuanto no haya teclas pulsadas…")
+
+    def detener(self):
+        if self.motor:
+            self.motor.detener()
+            self.lbl_estado.configure(text="Deteniendo…")
+
+    def recapturar(self):
+        if not (self.motor and self.motor.en_pausa()):
+            return
+        try:
+            n = int(self.v_recapturar.get())
+            if n < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Recapturar", "Escribe el número de la captura a rehacer.")
+            return
+        self.log(f"Recapturando la nº {n}…")
+        self.raiz.iconify()
+        self.motor.recapturar(n)
+
+    def _preguntar_desde_hilo(self, datos):
+        """Lo llama el hilo del motor: muestra el aviso en la interfaz y espera."""
+        respuesta = {"evento": threading.Event(), "valor": "detener"}
+        self.cola.put(("preguntar", (datos, respuesta)))
+        respuesta["evento"].wait()
+        return respuesta["valor"]
+
+    def _dialogo_error(self, datos, respuesta):
+        self._mostrar()
+        pitido(400, 300)
+        dlg = tk.Toplevel(self.raiz)
+        dlg.title(f"Problema en la captura {datos['numero']}")
+        dlg.transient(self.raiz)
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+        ttk.Label(dlg, padding=12, wraplength=440, justify="left", text=(
+            f"La captura nº {datos['numero']} falló después de los reintentos.\n\n"
+            f"Motivo: {datos['motivo']}\n\n¿Qué hago?")).pack()
+        botones = ttk.Frame(dlg, padding=(12, 0, 12, 12))
+        botones.pack(fill="x")
+
+        def elegir(valor):
+            respuesta["valor"] = valor
+            dlg.destroy()
+            if valor in ("reintentar", "guardar") and not datos.get("manual"):
+                self.raiz.iconify()
+            respuesta["evento"].set()
+
+        opciones = [("Reintentar", "reintentar")]
+        if not datos.get("manual"):
+            opciones.append(("Pausar para arreglarlo", "pausar"))
+        if datos.get("hay_imagen"):
+            opciones.append(("Guardarla así", "guardar"))
+        opciones.append(("Cancelar" if datos.get("manual") else "Detener",
+                         "pausar" if datos.get("manual") else "detener"))
+        for texto, valor in opciones:
+            ttk.Button(botones, text=texto, command=lambda v=valor: elegir(v)).pack(side="left", padx=3)
+        dlg.protocol("WM_DELETE_WINDOW", lambda: elegir(opciones[-1][1]))
+
+    def _evento_motor(self, tipo, d):
+        if tipo == "captura":
+            if d.get("manual"):
+                self.log(f"Captura {d['numero']} rehecha.")
+                return
+            self.barra.configure(value=d["numero"])
+            extra = f" (intento {d['intento']})" if d["intento"] not in (1, "aviso") else ""
+            if d["intento"] == "aviso":
+                extra = f" — guardada con aviso: {d.get('aviso')}"
+                self.log(f"Captura {d['numero']}{extra}")
+            elif extra:
+                self.log(f"Captura {d['numero']} correcta{extra}")
+            self.lbl_estado.configure(text=f"Captura {d['numero']} de {d['total']}{extra}")
+            self.v_recapturar.set(str(d["numero"]))
+        elif tipo == "fallo":
+            self.log(f"Captura {d['numero']}: intento {d['intento']}/{d['maximo']} falló — {d['motivo']}")
+        elif tipo == "repeticion":
+            self.raiz.title(f"Capturador — repetición {d['repeticion']}/{d['repeticiones']}")
+        elif tipo == "aviso":
+            self.log(d["mensaje"])
+        elif tipo == "pausa":
+            self._mostrar()
+            self.btn_pausa.configure(text="▶ Continuar (F9)")
+            self.marco_pausa.pack(fill="x", pady=(6, 0), before=self.barra)
+            self.lbl_estado.configure(text=f"En pausa. Última guardada: {d.get('ultima')}. "
+                                           f"Al continuar sigue con la {d.get('siguiente')}.")
+            self.log("En pausa.")
+        elif tipo == "reanudar":
+            self.btn_pausa.configure(text="⏸ Pausar (F9)")
+            self.marco_pausa.pack_forget()
+            self.raiz.iconify()
+            self.log("Continúa.")
+        elif tipo == "recapturada":
+            self._mostrar()
+        elif tipo == "fin":
+            self._terminar(d)
+
+    def _terminar(self, d):
+        if self.oyente_atajos:
+            self.oyente_atajos.stop()
+            self.oyente_atajos = None
+        self.raiz.title(f"Capturador {VERSION}")
+        self._modo_ejecucion(False)
+        self._mostrar()
+        situacion = d.get("estado")
+        self.log(f"Fin: {situacion}. {d.get('mensaje', '')}")
+        if d.get("siguiente"):
+            self.v["inicio"].set(str(d["siguiente"]))
+        if situacion == "completado":
+            pitido(1200, 200)
+            self.lbl_estado.configure(text="Terminado.")
+            if self.v_pdf_al_final.get():
+                self._crear_pdfs(self.v["carpeta"].get())
+        else:
+            pitido(400, 400)
+            self.lbl_estado.configure(text=(
+                f"Detenido. Para seguir: deja en pantalla la captura {d.get('siguiente')} "
+                "y pulsa Iniciar (ya está puesta como «Empezar en»)."))
+        self.motor = None
+
+    # ------------------------------------------------------------------
+    # PDF
+    # ------------------------------------------------------------------
+    def crear_pdfs_ahora(self):
+        ruta = filedialog.askdirectory(title="Carpeta con las imágenes",
+                                       initialdir=self.v["carpeta"].get() or str(Path.home()))
+        if ruta:
+            self._crear_pdfs(ruta)
+
+    def _crear_pdfs(self, carpeta):
+        try:
+            por_pdf = int(self.v_por_pdf.get())
+        except ValueError:
+            messagebox.showerror("PDF", "«Imágenes por PDF» debe ser un número.")
+            return
+        self.log(f"Creando PDF de {por_pdf} imágenes con {carpeta}…")
+
+        def trabajo():
+            try:
+                creados = pdfs.generar_pdfs(
+                    carpeta, por_pdf,
+                    progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")))
+                self.cola.put(("log", f"Listo: {len(creados)} PDF en {Path(creados[0]).parent}"))
+            except Exception as e:
+                self.cola.put(("log", f"Error al crear los PDF: {e}"))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    # ------------------------------------------------------------------
+    # Cola de mensajes entre hilos
+    # ------------------------------------------------------------------
+    def _atender_cola(self):
+        try:
+            while True:
+                tipo, dato = self.cola.get_nowait()
+                if tipo == "motor":
+                    self._evento_motor(*dato)
+                elif tipo == "preguntar":
+                    self._dialogo_error(*dato)
+                elif tipo == "atajo":
+                    if dato == "pausa":
+                        self.alternar_pausa()
+                    else:
+                        self.detener()
+                elif tipo == "marca":
+                    self.log("  marca de captura")
+                elif tipo == "grabacion_fin":
+                    self.macro = dato
+                    self.ruta_macro = None
+                    self._mostrar()
+                    self._actualizar_resumen()
+                    self.log("Grabación terminada: " + macros.texto_resumen(dato)
+                             + ". Guárdala con «Guardar macro…» si la quieres reutilizar.")
+                    self.lbl_estado.configure(text="Listo.")
+                elif tipo == "log":
+                    self.log(dato)
+        except queue.Empty:
+            pass
+        self.raiz.after(100, self._atender_cola)
+
+    def _cerrar(self):
+        if self.motor and not messagebox.askyesno("Salir", "Hay una ejecución en marcha. ¿Detenerla y salir?"):
+            return
+        if self.motor:
+            self.motor.detener()
+        if self.grabador:
+            self.grabador.detener()
+        self._guardar_config()
+        self.raiz.destroy()
+
+
+def main():
+    if sys.platform == "win32":
+        import ctypes
+        try:  # coordenadas en píxeles reales aunque Windows tenga escala 125 %, 150 %…
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+    raiz = tk.Tk()
+    try:
+        ttk.Style().theme_use("vista" if sys.platform == "win32" else "clam")
+    except tk.TclError:
+        pass
+    App(raiz)
+    raiz.mainloop()
