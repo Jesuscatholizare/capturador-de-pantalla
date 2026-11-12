@@ -1,4 +1,4 @@
-# Capturador 1.3.0: graba, repite, captura y crea PDF
+# Capturador 1.4.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -111,6 +111,14 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 - **Imágenes por PDF**: 30 por defecto.
 - Al terminar se crean solos en la subcarpeta `PDF`: `lote_001_paginas_00001-00030.pdf`, `lote_002_paginas_00031-00060.pdf`… El último lleva las que sobren.
 - **Crear PDF ahora con la carpeta…** sirve para cualquier carpeta de imágenes, aunque no las haya hecho este programa.
+
+## Dejarlo trabajando de noche
+- Mientras trabaja (y mientras crea los PDF), el programa pide a Windows que **no se suspenda ni apague la pantalla**. Al terminar, o si se detiene, **el equipo vuelve a su configuración normal** y se suspenderá cuando le toque.
+- Lo que el programa **no** puede evitar:
+  - **Cerrar la tapa de la laptop.** Déjala abierta y **enchufada**.
+  - **El bloqueo de pantalla** que impone una organización (en equipos con Device Guard es habitual). Si se bloquea, las capturas fallan y el programa se detiene o pregunta, según lo que hayas elegido; luego se reanuda con «Continuar donde se quedó». Para una noche entera, elige en la pestaña 4 **«Guardarla igual y anotarlo»** o **«Detener»**, para que no se quede esperando tu respuesta.
+  - **Reinicios por actualizaciones de Windows.** Pospónlos antes de irte.
+- Haz antes una prueba corta para confirmar que todo va bien.
 
 ## Archivos en la carpeta de destino
 | Archivo | Para qué |

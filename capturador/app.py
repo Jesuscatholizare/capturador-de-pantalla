@@ -8,10 +8,10 @@ from dataclasses import asdict, fields
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import capturas, estado, macro as macros, pdfs, teclas
+from . import capturas, energia, estado, macro as macros, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
@@ -648,7 +648,11 @@ class App:
 
     def _hilo_motor(self):
         try:
-            self.motor.ejecutar()
+            with energia.mantener_despierto() as activo:
+                if activo:
+                    self.cola.put(("log", "Mientras trabaja, el equipo no se suspenderá ni "
+                                          "apagará la pantalla. Al terminar vuelve a lo normal."))
+                self.motor.ejecutar()
         except Exception as e:  # error inesperado: se informa y se libera la interfaz
             self.cola.put(("motor", ("fin", {"estado": "error", "mensaje": str(e)})))
 
@@ -802,9 +806,10 @@ class App:
 
         def trabajo():
             try:
-                creados = pdfs.generar_pdfs(
-                    carpeta, por_pdf,
-                    progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")))
+                with energia.mantener_despierto():
+                    creados = pdfs.generar_pdfs(
+                        carpeta, por_pdf,
+                        progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")))
                 self.cola.put(("log", f"Listo: {len(creados)} PDF en {Path(creados[0]).parent}"))
             except Exception as e:
                 self.cola.put(("log", f"Error al crear los PDF: {e}"))
