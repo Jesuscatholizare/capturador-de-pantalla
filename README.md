@@ -1,4 +1,4 @@
-# Capturador 1.0.0: graba, repite, captura y crea PDF
+# Capturador 1.1.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -61,8 +61,13 @@ Si también se bloquea así, pide al área de sistemas que autorice Python y las
 
 ### 3. Imágenes
 - Elige la **carpeta**. Las imágenes se llaman `captura_00001.png`, `captura_00002.png`…
-- **Región**: pulsa *Seleccionar con el ratón* y arrastra sobre la zona (por ejemplo, solo la página, sin la barra de tareas). Si la dejas vacía, se captura toda la pantalla.
-- **Probar una captura** guarda `prueba.png` para comprobar la zona.
+- **Monitor**: `1` es la pantalla principal, `2` la segunda y `0` las dos juntas. Solo cuenta cuando no hay áreas marcadas.
+- **Áreas a capturar**: pulsa **➕ Añadir área…**. Se oscurecen **las dos pantallas** y arrastras sobre la zona que quieres. Repítelo para el **área 2**: las que ya marcaste se ven en amarillo. Puedes marcar las que necesites y en cualquier pantalla.
+  - Cada área se guarda como **imagen separada y en orden**: con dos áreas, `captura_00001` es el área 1, `captura_00002` el área 2, `captura_00003` otra vez el área 1… En el PDF quedan intercaladas igual, como las páginas izquierda y derecha de un libro abierto.
+  - Las áreas quedan fijas para todas las vueltas, y el programa las recuerda para la próxima vez.
+  - Sin áreas, se captura el monitor completo.
+- **Probar una captura** guarda `prueba.png` (o `prueba_area1.png`, `prueba_area2.png`…) para comprobar las zonas.
+- Con dos áreas, cada vuelta produce dos imágenes: **100 repeticiones = 200 imágenes**. La pestaña 2 muestra el total.
 
 ### 4. Si algo falla
 Cada captura se comprueba antes de guardarla:
@@ -111,7 +116,8 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 - La macro repite **posiciones de pantalla**. Si mueves la ventana, cambias la resolución o la escala de Windows entre la grabación y la reproducción, los clics caen en otro sitio. Graba con la ventana maximizada.
 - Mientras se ejecuta, no uses el ratón ni el teclado. Para intervenir, pulsa **F9** antes.
 - Al reanudar, el programa no sabe qué hay en pantalla: tú dejas a la vista la página que corresponde.
-- Con *marcas* (varias capturas por vuelta), al reanudar a mitad de una vuelta se rehace la vuelta completa desde su primera captura. El programa avisa.
+- Con *marcas* o con varias áreas (varias capturas por vuelta), al reanudar a mitad de una vuelta se rehace la vuelta completa desde su primera captura. El programa avisa.
+- Al reanudar, usa las mismas áreas que la primera vez; si no, la numeración (área 1, área 2…) no cuadra. El programa avisa si cambiaron.
 - Al pausar con una tecla o un botón del ratón pulsados (un arrastre, por ejemplo), la pausa espera a que se suelten.
 - Las combinaciones que Windows reserva para sí (Ctrl+Alt+Supr, Win+L) no se pueden reproducir.
 

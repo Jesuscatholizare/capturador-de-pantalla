@@ -58,23 +58,29 @@ class Motor:
                  notificar=None, preguntar=None):
         """
         reproductor: objeto con ejecutar(ev), soltar_todo(), hay_algo_pulsado()
-        capturar:    función sin argumentos que devuelve una imagen PIL
+        capturar:    función sin argumentos que devuelve una imagen PIL, o una
+                     lista de funciones (una por área): en cada punto de
+                     captura se toma una imagen de cada área, en orden
         notificar:   función(tipo, datos: dict) para informar a la interfaz
         preguntar:   función(datos: dict) -> una de DECISIONES (bloqueante)
         """
         self.macro = macro
         self.cfg = config
         self.repro = reproductor
-        self.capturar = capturar
+        self.capturadores = list(capturar) if isinstance(capturar, (list, tuple)) else [capturar]
+        if not self.capturadores:
+            raise ValueError("No hay ninguna área de captura.")
+        self.areas = len(self.capturadores)
         self._notificar = notificar or (lambda tipo, datos: None)
         self.preguntar = preguntar
-        self.cpr = capturas_por_repeticion(macro, config.modo)
+        self.puntos = capturas_por_repeticion(macro, config.modo)
+        self.cpr = self.puntos * self.areas
         self.total = self.cpr * config.repeticiones
         self._detener = threading.Event()
         self._pausa = threading.Event()
         self._recaptura = None
         self._lock = threading.Lock()
-        self._previa = None
+        self._previas = {}   # área -> última imagen guardada de esa área
         self._ultima = None
         self._siguiente = None
         self._rep = 0
@@ -118,7 +124,8 @@ class Motor:
             ultima_guardada=self._ultima, total_capturas=self.total,
             capturas_por_repeticion=self.cpr,
             repeticiones_completadas=self._reps_completas,
-            total_repeticiones=self.cfg.repeticiones, config=asdict(self.cfg))
+            total_repeticiones=self.cfg.repeticiones, areas=self.areas,
+            config=asdict(self.cfg))
 
     def _registrar(self, numero, intento, mensaje):
         estado.registrar(self.cfg.carpeta, numero, self._rep + 1, intento, mensaje)
@@ -153,14 +160,27 @@ class Motor:
         return time.monotonic() - inicio
 
     # -- captura con reintentos ---------------------------------------------
+    def area_de(self, numero):
+        """Índice del área (0, 1…) que corresponde a la captura `numero`."""
+        return (numero - 1) % self.areas
+
+    def _capturar_punto(self, numero):
+        """Toma una imagen de cada área; devuelve el siguiente número libre."""
+        for _ in range(self.areas):
+            self._capturar(numero)
+            numero += 1
+        return numero
+
     def _capturar(self, numero, manual=False):
         cfg = self.cfg
-        previa = None if manual else self._previa
+        area = self.area_de(numero)
+        capturar = self.capturadores[area]
+        previa = None if manual else self._previas.get(area)
         while True:
             ultima_img, motivo = None, None
             for intento in range(1, cfg.reintentos + 2):
                 try:
-                    img = self.capturar()
+                    img = capturar()
                 except Exception as e:  # noqa: BLE001 - cualquier fallo de captura
                     img, motivo = None, f"error al capturar: {e}"
                 else:
@@ -208,7 +228,7 @@ class Motor:
     def _guardar_imagen(self, numero, img, manual):
         capturas.guardar(img, self.ruta(numero))
         if not manual:
-            self._previa = img
+            self._previas[self.area_de(numero)] = img
             self._ultima = numero
             self._siguiente = numero + 1
             self._guardar_progreso("en curso")
@@ -229,10 +249,11 @@ class Motor:
             self.notificar("aviso", mensaje=(
                 f"Cada repetición toma {self.cpr} capturas: se empieza en la "
                 f"{numero}, al principio de la repetición {rep0 + 1}."))
-        anterior = self.ruta(numero - 1)
-        if numero > 1 and anterior.exists():
-            with Image.open(anterior) as im:
-                self._previa = im.convert("RGB")
+        for n in range(max(1, numero - self.areas), numero):
+            anterior = self.ruta(n)
+            if anterior.exists():
+                with Image.open(anterior) as im:
+                    self._previas[self.area_de(n)] = im.convert("RGB")
         self._siguiente = numero
         self._reps_completas = rep0
         usa_marcas = cfg.modo in ("marcas", "ambos")
@@ -252,14 +273,12 @@ class Motor:
                     if ev["tipo"] == "captura":
                         if usa_marcas:
                             self._esperar(espera)
-                            self._capturar(numero)
-                            numero += 1
+                            numero = self._capturar_punto(numero)
                     else:
                         self.repro.ejecutar(ev)
                 if usa_final:
                     self._esperar(espera)
-                    self._capturar(numero)
-                    numero += 1
+                    numero = self._capturar_punto(numero)
                 self._reps_completas = rep + 1
                 self._guardar_progreso("en curso")
                 if rep < cfg.repeticiones - 1:

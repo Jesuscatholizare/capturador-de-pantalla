@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import capturas, estado, macro as macros, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
@@ -76,7 +76,7 @@ class App:
             "espera_reanudar_ms": S(value="1500"),
         }
         self.v_monitor = S(value="1")
-        self.v_region = S(value="")
+        self.areas = []  # [[x, y, ancho, alto], ...]; vacía = pantalla completa
         self.v_por_pdf = S(value="30")
         self.v_pdf_al_final = B(value=True)
         self.v_recapturar = S(value="")
@@ -89,10 +89,18 @@ class App:
         for clave, var in self.v.items():
             if clave in datos:
                 var.set(datos[clave])
-        for clave, var in (("monitor", self.v_monitor), ("region", self.v_region),
+        for clave, var in (("monitor", self.v_monitor),
                            ("por_pdf", self.v_por_pdf), ("pdf_al_final", self.v_pdf_al_final)):
             if clave in datos:
                 var.set(datos[clave])
+        areas = datos.get("areas")
+        if areas is None and datos.get("region"):  # configuración de la versión 1.0
+            try:
+                areas = [[int(v) for v in str(datos["region"]).split(",")]]
+            except ValueError:
+                areas = []
+        self.areas = [list(a) for a in (areas or []) if len(a) == 4]
+        self._refrescar_areas()
         ruta = datos.get("ruta_macro")
         if ruta and Path(ruta).exists():
             try:
@@ -103,7 +111,7 @@ class App:
 
     def _guardar_config(self):
         datos = {k: v.get() for k, v in self.v.items()}
-        datos.update(monitor=self.v_monitor.get(), region=self.v_region.get(),
+        datos.update(monitor=self.v_monitor.get(), areas=self.areas,
                      por_pdf=self.v_por_pdf.get(), pdf_al_final=self.v_pdf_al_final.get(),
                      ruta_macro=self.ruta_macro)
         try:
@@ -136,14 +144,25 @@ class App:
             raise ValueError("Los reintentos no pueden ser negativos.")
         return Config(**valores)
 
-    def _leer_region(self):
-        texto = self.v_region.get().strip()
-        if not texto:
-            return None
-        partes = [int(p) for p in texto.replace(";", ",").split(",")]
-        if len(partes) != 4 or partes[2] <= 0 or partes[3] <= 0:
-            raise ValueError("La región debe ser: x, y, ancho, alto")
-        return tuple(partes)
+    def _refrescar_areas(self):
+        if not hasattr(self, "lista_areas"):
+            return
+        self.lista_areas.delete(0, "end")
+        for i, (x, y, w, h) in enumerate(self.areas, start=1):
+            self.lista_areas.insert("end", f"Área {i}:  x={x}  y={y}  ancho={w}  alto={h}")
+        if not self.areas:
+            self.lista_areas.insert("end", "(sin áreas: se captura el monitor completo)")
+        self._actualizar_resumen()
+
+    def quitar_area(self):
+        sel = self.lista_areas.curselection()
+        if sel and sel[0] < len(self.areas):
+            del self.areas[sel[0]]
+            self._refrescar_areas()
+
+    def borrar_areas(self):
+        self.areas = []
+        self._refrescar_areas()
 
     # ------------------------------------------------------------------
     # Construcción de la ventana
@@ -198,21 +217,29 @@ class App:
         p = ttk.Frame(cuaderno, padding=10)
         cuaderno.add(p, text="3. Imágenes")
         ttk.Label(p, text="Carpeta:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(p, textvariable=self.v["carpeta"], width=48).grid(row=0, column=1, columnspan=2, sticky="we")
-        ttk.Button(p, text="Elegir…", command=self.elegir_carpeta).grid(row=0, column=3, padx=4)
+        fila_carpeta = ttk.Frame(p)
+        fila_carpeta.grid(row=0, column=1, columnspan=3, sticky="we")
+        ttk.Button(fila_carpeta, text="Elegir…", command=self.elegir_carpeta).pack(side="right", padx=(4, 0))
+        ttk.Entry(fila_carpeta, textvariable=self.v["carpeta"], width=20).pack(side="left", fill="x", expand=True)
         self._campo(p, 1, "Nombre de archivo:", self.v["prefijo"])
         ttk.Label(p, text="(captura_00001.png, captura_00002.png…)").grid(row=1, column=2, sticky="w")
         ttk.Label(p, text="Formato:").grid(row=2, column=0, sticky="w", pady=3)
         ttk.Combobox(p, textvariable=self.v["formato"], values=["png", "jpg"], width=8,
                      state="readonly").grid(row=2, column=1, sticky="w")
         self._campo(p, 3, "Monitor (1 = principal, 0 = todos):", self.v_monitor)
-        ttk.Label(p, text="Región (x, y, ancho, alto):").grid(row=4, column=0, sticky="w", pady=3)
-        ttk.Entry(p, textvariable=self.v_region, width=22).grid(row=4, column=1, sticky="w")
+        ttk.Label(p, text="Áreas a capturar:").grid(row=4, column=0, sticky="nw", pady=3)
+        self.lista_areas = tk.Listbox(p, height=4, width=46, activestyle="none")
+        self.lista_areas.grid(row=4, column=1, columnspan=2, sticky="we", pady=3)
         fila = ttk.Frame(p)
-        fila.grid(row=4, column=2, columnspan=2, sticky="w")
-        ttk.Button(fila, text="Seleccionar con el ratón", command=self.seleccionar_region).pack(side="left")
-        ttk.Button(fila, text="Pantalla completa", command=lambda: self.v_region.set("")).pack(side="left", padx=4)
-        ttk.Button(p, text="Probar una captura", command=self.probar_captura).grid(row=5, column=0, sticky="w", pady=8)
+        fila.grid(row=5, column=1, columnspan=3, sticky="w")
+        ttk.Button(fila, text="➕ Añadir área…", command=self.seleccionar_region).pack(side="left")
+        ttk.Button(fila, text="Quitar la seleccionada", command=self.quitar_area).pack(side="left", padx=4)
+        ttk.Button(fila, text="Borrar todas", command=self.borrar_areas).pack(side="left")
+        ttk.Label(p, foreground="#555", wraplength=560, justify="left", text=(
+            "Cada área se guarda como imagen separada y en orden: área 1, área 2, área 1, "
+            "área 2… Las áreas pueden estar en cualquiera de los monitores. Sin áreas, se "
+            "captura el monitor indicado arriba.")).grid(row=6, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Button(p, text="Probar una captura", command=self.probar_captura).grid(row=7, column=0, sticky="w", pady=8)
 
         # 4. Errores
         p = ttk.Frame(cuaderno, padding=10)
@@ -295,10 +322,14 @@ class App:
         self.lbl_macro.configure(text=("Macro: " + macros.texto_resumen(self.macro) + nombre)
                                  if hay else "Todavía no hay macro grabada.")
         try:
-            cpr = capturas_por_repeticion(self.macro, self.v["modo"].get())
+            puntos = capturas_por_repeticion(self.macro, self.v["modo"].get())
             reps = int(self.v["repeticiones"].get())
+            n_areas = max(1, len(self.areas))
+            cpr = puntos * n_areas
+            detalle = (f"{puntos} momento(s) de captura × {n_areas} áreas = {cpr} imágenes por repetición"
+                       if n_areas > 1 else f"{cpr} captura(s) por repetición")
             self.lbl_total.configure(
-                text=f"{cpr} captura(s) por repetición × {reps} = {cpr * reps} imágenes", foreground="#1a5")
+                text=f"{detalle} × {reps} = {cpr * reps} imágenes", foreground="#1a5")
         except ValueError as e:
             self.lbl_total.configure(text=str(e), foreground="#b30")
 
@@ -385,31 +416,38 @@ class App:
         if ruta:
             self.v["carpeta"].set(ruta)
 
-    def _funcion_captura(self):
-        region = self._leer_region()
+    def _funciones_captura(self):
+        """Una función de captura por área (o una sola, del monitor completo)."""
         monitor = int(self.v_monitor.get())
-        return lambda: capturas.tomar_captura(monitor, region)
+        if not self.areas:
+            return [lambda: capturas.tomar_captura(monitor, None)]
+        return [lambda r=tuple(a): capturas.tomar_captura(monitor, r) for a in self.areas]
 
     def probar_captura(self):
         try:
-            captura = self._funcion_captura()
+            captura = self._funciones_captura()
             self.raiz.iconify()
             self.raiz.update()
             self.raiz.after(800, lambda: self._probar(captura))
         except Exception as e:
             messagebox.showerror("Probar captura", str(e))
 
-    def _probar(self, captura):
+    def _probar(self, funciones):
         try:
-            img = captura()
             carpeta = Path(self.v["carpeta"].get())
             carpeta.mkdir(parents=True, exist_ok=True)
-            ruta = carpeta / "prueba.png"
-            capturas.guardar(img, ruta)
-            motivo = capturas.motivo_rechazo(img)
+            lineas = []
+            for i, captura in enumerate(funciones, start=1):
+                img = captura()
+                nombre = "prueba.png" if len(funciones) == 1 else f"prueba_area{i}.png"
+                ruta = carpeta / nombre
+                capturas.guardar(img, ruta)
+                motivo = capturas.motivo_rechazo(img)
+                lineas.append(f"Prueba: {img.size[0]}×{img.size[1]} px → {ruta}"
+                              + (f" (aviso: {motivo})" if motivo else ""))
             self._mostrar()
-            self.log(f"Prueba: {img.size[0]}×{img.size[1]} px → {ruta}"
-                     + (f" (aviso: {motivo})" if motivo else ""))
+            for linea in lineas:
+                self.log(linea)
         except Exception as e:
             self._mostrar()
             messagebox.showerror("Probar captura", str(e))
@@ -430,8 +468,14 @@ class App:
         capa.attributes("-topmost", True)
         lienzo = tk.Canvas(capa, cursor="cross", bg="gray20", highlightthickness=0)
         lienzo.pack(fill="both", expand=True)
+        n = len(self.areas) + 1
         lienzo.create_text(todo["width"] // 2, 40, fill="white", font=("Segoe UI", 18),
-                           text="Arrastra para marcar la zona. Esc para cancelar.")
+                           text=f"Arrastra para marcar el ÁREA {n}. Esc para cancelar.")
+        for i, (x, y, w, h) in enumerate(self.areas, start=1):
+            cx, cy = x - todo["left"], y - todo["top"]
+            lienzo.create_rectangle(cx, cy, cx + w, cy + h, outline="yellow", width=3)
+            lienzo.create_text(cx + 10, cy + 10, anchor="nw", fill="yellow",
+                               font=("Segoe UI", 16, "bold"), text=f"Área {i}")
         inicio = {}
 
         def pulsar(e):
@@ -450,8 +494,9 @@ class App:
             capa.destroy()
             self._mostrar()
             if x1 - x0 > 5 and y1 - y0 > 5:
-                self.v_region.set(f"{x0}, {y0}, {x1 - x0}, {y1 - y0}")
-                self.log(f"Región: x={x0} y={y0} ancho={x1 - x0} alto={y1 - y0}")
+                self.areas.append([x0, y0, x1 - x0, y1 - y0])
+                self._refrescar_areas()
+                self.log(f"Área {len(self.areas)}: x={x0} y={y0} ancho={x1 - x0} alto={y1 - y0}")
 
         def cancelar(_e=None):
             capa.destroy()
@@ -479,6 +524,10 @@ class App:
         self.log(f"Progreso encontrado ({prog.get('estado')}, {prog.get('actualizado')}): "
                  f"última guardada {prog.get('ultima_guardada')}, se seguirá en la "
                  f"{prog['siguiente']} de {prog.get('total_capturas')}.")
+        areas_antes = prog.get("areas", 1)
+        if areas_antes != max(1, len(self.areas)):
+            self.log(f"¡Atención! Esa carpeta se hizo con {areas_antes} área(s) y ahora hay "
+                     f"{max(1, len(self.areas))}. Deja las mismas áreas o la numeración no cuadrará.")
         self.log("Antes de iniciar, deja en pantalla lo que corresponde a esa captura.")
 
     def iniciar(self):
@@ -487,7 +536,7 @@ class App:
             return
         try:
             cfg = self._leer_config()
-            captura = self._funcion_captura()
+            captura = self._funciones_captura()
             int(self.v_por_pdf.get())
             from .reproductor import ReproductorPynput
             motor = Motor(self.macro, cfg, ReproductorPynput(), captura,
@@ -554,7 +603,8 @@ class App:
         except ValueError:
             messagebox.showerror("Recapturar", "Escribe el número de la captura a rehacer.")
             return
-        self.log(f"Recapturando la nº {n}…")
+        area = self.motor.area_de(n) + 1
+        self.log(f"Recapturando la nº {n}" + (f" (área {area})…" if self.motor.areas > 1 else "…"))
         self.raiz.iconify()
         self.motor.recapturar(n)
 

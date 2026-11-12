@@ -233,3 +233,64 @@ def test_rechazo():
     assert capturas.motivo_rechazo(a, b) is None
     assert "igual" in capturas.motivo_rechazo(a, a.copy())
     assert "vacía" in capturas.motivo_rechazo(Image.new("RGB", (50, 50), "white"))
+
+
+class Area:
+    """Una zona de la pantalla: cambia con cada vuelta, distinta de las otras zonas."""
+    def __init__(self, repro, desfase, fallos=None):
+        self.repro, self.desfase = repro, desfase
+        self.fallos = dict(fallos or {})
+        self.llamadas = 0
+
+    def __call__(self):
+        self.llamadas += 1
+        tipo = self.fallos.pop(self.llamadas, None)
+        if tipo == "excepcion":
+            raise OSError("zona no disponible")
+        return pagina(len(self.repro.ejecutados) * 10 + self.desfase)
+
+
+def test_dos_areas_imagenes_separadas_en_orden(tmp_path):
+    repro = ReproFalso()
+    a1, a2 = Area(repro, 0), Area(repro, 5)
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=4), repro, [a1, a2])
+    assert m.cpr == 2 and m.total == 8
+    assert m.ejecutar() == "completado"
+    assert len(archivos(tmp_path)) == 8
+    assert a1.llamadas == 4 and a2.llamadas == 4
+    # impares = área 1, pares = área 2
+    img1 = Image.open(tmp_path / "captura_00003.png").convert("RGB")
+    img2 = Image.open(tmp_path / "captura_00004.png").convert("RGB")
+    assert capturas.porcentaje_cambio(img1, pagina(2 * 2 * 10 + 0)) == 0
+    assert capturas.porcentaje_cambio(img2, pagina(2 * 2 * 10 + 5)) == 0
+    assert estado.cargar_progreso(tmp_path)["areas"] == 2
+
+
+def test_dos_areas_comparan_con_su_misma_area(tmp_path):
+    """El área 2 no se compara con el área 1, sino con el área 2 de la vuelta anterior."""
+    repro = ReproFalso()
+    fija = pagina(999)
+    a1 = Area(repro, 0)
+    a2 = lambda: fija.copy()  # el área 2 nunca cambia
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=3, politica="detener"),
+              repro, [a1, a2])
+    assert m.ejecutar() == "detenido"
+    # 1 (área 1) y 2 (área 2) se guardan; 3 (área 1) bien; 4 (área 2) igual a la 2
+    assert len(archivos(tmp_path)) == 3
+    assert estado.cargar_progreso(tmp_path)["siguiente"] == 4
+
+
+def test_dos_areas_reanudar(tmp_path):
+    repro = ReproFalso()
+    a1, a2 = Area(repro, 0), Area(repro, 5, fallos={3: "excepcion", 4: "excepcion", 5: "excepcion"})
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=5, politica="detener"),
+              repro, [a1, a2])
+    assert m.ejecutar() == "detenido"
+    prog = estado.cargar_progreso(tmp_path)
+    assert prog["siguiente"] == 6  # falló el área 2 de la vuelta 3
+    repro2 = ReproFalso()
+    m2 = Motor(macro_simple(), config(tmp_path, repeticiones=5, inicio=6), repro2,
+               [Area(repro2, 0), Area(repro2, 5)])
+    assert m2.ejecutar() == "completado"
+    assert len(archivos(tmp_path)) == 10
+    assert len(repro2.ejecutados) == 3 * 2  # rehace la vuelta 3 completa, luego 4 y 5
