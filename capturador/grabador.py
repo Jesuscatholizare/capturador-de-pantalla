@@ -1,6 +1,8 @@
 """Graba teclado y ratón con pynput.
 
-F8 inserta una marca de captura; F9 termina la grabación.
+F8 inserta una marca de captura; F9 termina la grabación. También se puede
+marcar y terminar desde el indicador de la interfaz: lo que ocurre dentro de
+sus «zonas excluidas» no se graba.
 """
 import threading
 import time
@@ -22,6 +24,28 @@ class Grabador:
         self._oyente_raton = None
         self._oyente_teclado = None
         self._terminado = False
+        self.zonas_excluidas = []  # [(x, y, ancho, alto)]: el ratón ahí no se graba
+
+    def _excluido(self, x, y):
+        return any(zx <= x < zx + zw and zy <= y < zy + zh
+                   for zx, zy, zw, zh in self.zonas_excluidas)
+
+    # -- estado para el indicador ---------------------------------------
+    def conteo(self):
+        with self._lock:
+            ev = self.macro["eventos"]
+            marcas = sum(1 for e in ev if e["tipo"] == "captura")
+            return len(ev) - marcas, marcas
+
+    def activo(self):
+        """False si Windows cortó la lectura del ratón o del teclado."""
+        return all(o is not None and o.is_alive()
+                   for o in (self._oyente_raton, self._oyente_teclado))
+
+    def marcar(self):
+        self._agregar({"t": self._t(), "tipo": "captura"})
+        if self.al_marcar:
+            self.al_marcar()
 
     # -- utilidades ---------------------------------------------------
     def _t(self):
@@ -34,16 +58,22 @@ class Grabador:
 
     # -- ratón ----------------------------------------------------------
     def _mover(self, x, y):
+        if self._excluido(x, y):
+            return
         t = self._t()
         if t - self._ultimo_mov >= INTERVALO_MOVIMIENTO:
             self._ultimo_mov = t
             self._agregar({"t": t, "tipo": "mover", "x": int(x), "y": int(y)})
 
     def _clic(self, x, y, boton, presionado):
+        if self._excluido(x, y):
+            return
         self._agregar({"t": self._t(), "tipo": "clic", "x": int(x), "y": int(y),
                        "boton": boton.name, "presionado": bool(presionado)})
 
     def _rueda(self, x, y, dx, dy):
+        if self._excluido(x, y):
+            return
         self._agregar({"t": self._t(), "tipo": "rueda", "x": int(x), "y": int(y),
                        "dx": int(dx), "dy": int(dy)})
 
@@ -52,9 +82,7 @@ class Grabador:
         nombre = teclas.nombre_especial(key)
         if nombre in teclas.RESERVADAS:
             if presionada and nombre == teclas.TECLA_MARCA:
-                self._agregar({"t": self._t(), "tipo": "captura"})
-                if self.al_marcar:
-                    self.al_marcar()
+                self.marcar()
             elif presionada and nombre == teclas.TECLA_PAUSA:
                 self.detener()
             return
@@ -88,8 +116,11 @@ class Grabador:
 
 def limpiar(eventos):
     """Quita teclas soltadas sin haberse pulsado durante la grabación
-    (p. ej. soltar la tecla con la que se arrancó) y ordena por tiempo."""
+    (p. ej. soltar la tecla con la que se arrancó), los movimientos del ratón
+    posteriores a la última acción (ir a pulsar «Terminar») y ordena por tiempo."""
     eventos = sorted(eventos, key=lambda e: e["t"])
+    while eventos and eventos[-1]["tipo"] == "mover":
+        eventos.pop()
     pulsadas = set()
     resultado = []
     for ev in eventos:

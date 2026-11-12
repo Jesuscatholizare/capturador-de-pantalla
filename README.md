@@ -1,4 +1,4 @@
-# Capturador 1.1.0: graba, repite, captura y crea PDF
+# Capturador 1.2.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -44,16 +44,19 @@ Si también se bloquea así, pide al área de sistemas que autorice Python y las
 
 ### 1. Grabar
 - Deja abierto lo que quieres capturar (el visor, el libro, la web…).
-- Pulsa **● Grabar**. La ventana se minimiza y tras 3 segundos empieza la grabación.
-- Haz **una sola vuelta**: por ejemplo, el clic en «página siguiente».
-- **F8** marca una captura en ese momento (solo si quieres varias capturas por vuelta).
-- **F9** termina la grabación.
+- Pulsa **● Grabar**. La ventana se minimiza y, tras 3 segundos y un pitido, aparece arriba a la derecha un recuadro rojo **● GRABANDO** con un contador.
+- Haz **una sola vuelta**: por ejemplo, el clic en «página siguiente». **No hace falta grabar la captura**: la toma el programa.
+- Para terminar, pulsa **■ Terminar** en el recuadro rojo, o **F9**. En muchas laptops hay que pulsar **Fn + F9**.
+- **Marcar captura** (o F8) solo sirve para el modo «en las marcas».
+- Lo que hagas dentro del recuadro rojo no se graba.
+- El contador **Acciones** debe subir al mover el ratón. Si se queda en 0, el equipo no deja leer el ratón y el teclado (política de seguridad o permisos).
 - Guarda la macro con **Guardar macro…** si la quieres reutilizar otro día.
 
 ### 2. Repetir y capturar
 - **Repeticiones**: cuántas vueltas dará.
 - **¿Cuándo capturar?**
-  - *Al final de cada repetición*: una imagen por vuelta.
+  - *Capturar y luego hacer las acciones* (**por defecto**): captura la página que está en pantalla y después pasa a la siguiente. La primera imagen es la página que tenías al pulsar Iniciar. En la última vuelta ya no pasa de página.
+  - *Hacer las acciones y luego capturar*: primero pasa de página y después captura. Así la página inicial **no** se captura.
   - *En las marcas (F8)*: una imagen en cada marca que pusiste al grabar.
   - *Ambos*: en las marcas y además al final de la vuelta.
 - **Espera antes de capturar**: margen para que la página cargue (800 ms por defecto). Si las páginas tardan, súbela.

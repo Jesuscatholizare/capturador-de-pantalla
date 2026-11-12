@@ -22,7 +22,7 @@ class Detenido(Exception):
 class Config:
     carpeta: str
     repeticiones: int = 1
-    modo: str = "final"            # final | marcas | ambos
+    modo: str = "inicio"           # inicio | final | marcas | ambos
     espera_captura_ms: int = 800   # espera antes de cada captura
     velocidad: float = 1.0         # 2.0 = el doble de rápido
     pausa_entre_reps_ms: int = 0
@@ -38,7 +38,7 @@ class Config:
     espera_reanudar_ms: int = 1500  # margen tras cerrar un aviso o reanudar
 
 
-MODOS = ("final", "marcas", "ambos")
+MODOS = ("inicio", "final", "marcas", "ambos")
 DECISIONES = ("reintentar", "pausar", "guardar", "detener")
 
 
@@ -49,6 +49,8 @@ def capturas_por_repeticion(macro, modo):
     if modo == "marcas" and marcas == 0:
         raise ValueError("El modo «en las marcas» necesita una macro con marcas "
                          "(pulsa F8 mientras grabas en el momento de capturar).")
+    if modo == "inicio":
+        return 1
     n = (marcas if modo in ("marcas", "ambos") else 0) + (1 if modo in ("final", "ambos") else 0)
     return n
 
@@ -258,6 +260,7 @@ class Motor:
         self._reps_completas = rep0
         usa_marcas = cfg.modo in ("marcas", "ambos")
         usa_final = cfg.modo in ("final", "ambos")
+        usa_inicio = cfg.modo == "inicio"
         espera = cfg.espera_captura_ms / 1000
         situacion, mensaje = "detenido", ""
         self.notificar("inicio", desde=numero, repeticion=rep0 + 1)
@@ -266,8 +269,14 @@ class Motor:
                 self._rep = rep
                 self.notificar("repeticion", repeticion=rep + 1,
                                repeticiones=cfg.repeticiones)
+                if usa_inicio:  # capturar lo que hay en pantalla y luego hacer las acciones
+                    self._esperar(espera)
+                    numero = self._capturar_punto(numero)
+                ultima_vuelta = rep == cfg.repeticiones - 1
                 t_prev = 0.0
-                for ev in self.macro["eventos"]:
+                # en modo «inicio», tras la última captura no hace falta pasar de página
+                eventos = [] if (usa_inicio and ultima_vuelta) else self.macro["eventos"]
+                for ev in eventos:
                     self._esperar((ev["t"] - t_prev) / cfg.velocidad)
                     t_prev = ev["t"]
                     if ev["tipo"] == "captura":

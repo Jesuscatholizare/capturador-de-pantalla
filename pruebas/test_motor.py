@@ -77,7 +77,7 @@ def macro_simple(marcas=0):
 
 
 def config(tmp_path, **kw):
-    base = dict(carpeta=str(tmp_path), repeticiones=5, espera_captura_ms=0,
+    base = dict(carpeta=str(tmp_path), repeticiones=5, modo="final", espera_captura_ms=0,
                 espera_reintento_ms=0, espera_reanudar_ms=0, reintentos=2)
     base.update(kw)
     return Config(**base)
@@ -294,3 +294,19 @@ def test_dos_areas_reanudar(tmp_path):
     assert m2.ejecutar() == "completado"
     assert len(archivos(tmp_path)) == 10
     assert len(repro2.ejecutados) == 3 * 2  # rehace la vuelta 3 completa, luego 4 y 5
+
+
+def test_modo_inicio_captura_antes_de_las_acciones(tmp_path):
+    """Captura la página que ya está en pantalla y después pasa a la siguiente."""
+    repro = ReproFalso()
+    vistos = []
+
+    def captura():
+        vistos.append(len(repro.ejecutados))  # acciones hechas antes de esta captura
+        return pagina(len(repro.ejecutados))
+
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=3, modo="inicio"), repro, captura)
+    assert m.ejecutar() == "completado"
+    assert vistos == [0, 2, 4]          # la primera, sin haber pulsado nada
+    assert len(repro.ejecutados) == 4   # la última vuelta no pasa de página
+    assert len(archivos(tmp_path)) == 3

@@ -11,11 +11,12 @@ from tkinter import filedialog, messagebox, ttk
 from . import capturas, estado, macro as macros, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
-MODOS = [("Una captura al final de cada repetición", "final"),
+MODOS = [("Capturar y luego hacer las acciones (lo normal: captura la página y pasa a la siguiente)", "inicio"),
+         ("Hacer las acciones y luego capturar", "final"),
          ("En las marcas (F8) que pusiste al grabar", "marcas"),
          ("Ambos: en las marcas y al final", "ambos")]
 POLITICAS = [("Preguntarme qué hacer", "preguntar"),
@@ -60,7 +61,7 @@ class App:
         self.v = {
             "carpeta": S(value=str(Path.home() / "Capturas")),
             "repeticiones": S(value="10"),
-            "modo": S(value="final"),
+            "modo": S(value="inicio"),
             "espera_captura_ms": S(value="800"),
             "velocidad": S(value="1.0"),
             "pausa_entre_reps_ms": S(value="0"),
@@ -177,11 +178,13 @@ class App:
         p = ttk.Frame(cuaderno, padding=10)
         cuaderno.add(p, text="1. Grabar")
         ttk.Label(p, wraplength=560, justify="left", text=(
-            "Pulsa «Grabar». La ventana se minimiza y, tras 3 segundos, se graban tu "
-            "ratón y tu teclado.\n"
-            "  • F8 = marcar aquí una captura (si quieres varias por repetición)\n"
-            "  • F9 = terminar la grabación\n"
-            "Graba UNA sola vuelta (p. ej.: capturar la página y pasar a la siguiente).")
+            "Pulsa «Grabar». La ventana se minimiza, aparece arriba a la derecha un "
+            "recuadro rojo «GRABANDO» y se graban tu ratón y tu teclado.\n"
+            "  • Haz UNA sola vuelta: por ejemplo, el clic en «página siguiente».\n"
+            "  • Para terminar: botón «Terminar» del recuadro, o F9 (en laptops, quizá Fn+F9).\n"
+            "  • Marcar una captura en ese momento (solo para el modo «en las marcas»): "
+            "botón «Marcar captura» o F8.\n"
+            "No hace falta grabar la captura: la toma el programa.")
         ).pack(anchor="w")
         fila = ttk.Frame(p)
         fila.pack(anchor="w", pady=8)
@@ -363,7 +366,8 @@ class App:
         if self.macro["eventos"] and not messagebox.askyesno(
                 "Grabar", "Ya hay una macro. ¿Reemplazarla por una nueva grabación?"):
             return
-        self.log("Grabación: prepara la pantalla. F8 = marca de captura, F9 = terminar.")
+        self.log("Grabación: prepara la pantalla. Arriba a la derecha aparecerá el recuadro "
+                 "GRABANDO con el botón Terminar (o F9).")
         self._cuenta_atras(CUENTA_ATRAS, self._empezar_grabacion, "Grabando")
 
     def _empezar_grabacion(self):
@@ -371,13 +375,76 @@ class App:
         self.grabador = Grabador(
             al_terminar=lambda m: self.cola.put(("grabacion_fin", m)),
             al_marcar=lambda: (pitido(1500, 80), self.cola.put(("marca", None))))
+        self._crear_indicador()
         try:
             self.grabador.iniciar()
         except Exception as e:
+            self._cerrar_indicador()
             self._mostrar()
             messagebox.showerror("Grabar", f"No se pudo iniciar la grabación:\n{e}")
             return
         pitido(800, 150)
+        self._t_grabacion = 0
+        self.raiz.after(250, self._vigilar_grabacion)
+
+    def _crear_indicador(self):
+        """Recuadro siempre visible mientras se graba: contador y botones.
+        Lo que se haga dentro de él no se graba."""
+        ind = tk.Toplevel(self.raiz)
+        ind.overrideredirect(True)
+        ind.attributes("-topmost", True)
+        ind.configure(bg="#b00020")
+        cuerpo = tk.Frame(ind, bg="#b00020", padx=10, pady=6)
+        cuerpo.pack()
+        tk.Label(cuerpo, text="● GRABANDO", fg="white", bg="#b00020",
+                 font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        self.lbl_conteo = tk.Label(cuerpo, text="Acciones: 0", fg="white", bg="#b00020",
+                                   font=("Segoe UI", 10))
+        self.lbl_conteo.pack(anchor="w")
+        self.lbl_aviso_grab = tk.Label(cuerpo, text="", fg="#ffe08a", bg="#b00020",
+                                       font=("Segoe UI", 9), wraplength=260, justify="left")
+        self.lbl_aviso_grab.pack(anchor="w")
+        botones = tk.Frame(cuerpo, bg="#b00020")
+        botones.pack(anchor="w", pady=(4, 0))
+        tk.Button(botones, text="Marcar captura (F8)",
+                  command=lambda: self.grabador and self.grabador.marcar()).pack(side="left")
+        tk.Button(botones, text="■ Terminar (F9)",
+                  command=lambda: self.grabador and self.grabador.detener()).pack(side="left", padx=(6, 0))
+        ind.update_idletasks()
+        ancho, alto = ind.winfo_reqwidth(), ind.winfo_reqheight()
+        x = self.raiz.winfo_screenwidth() - ancho - 20
+        ind.geometry(f"+{x}+20")
+        ind.update_idletasks()
+        margen = 8  # el borde también queda fuera de la grabación
+        self.grabador.zonas_excluidas = [(x - margen, 20 - margen, ancho + 2 * margen, alto + 2 * margen)]
+        self.indicador = ind
+
+    def _cerrar_indicador(self):
+        ind = getattr(self, "indicador", None)
+        if ind is not None:
+            try:
+                ind.destroy()
+            except tk.TclError:
+                pass
+        self.indicador = None
+
+    def _vigilar_grabacion(self):
+        if not (self.grabador and getattr(self, "indicador", None)):
+            return
+        acciones, marcas = self.grabador.conteo()
+        self.lbl_conteo.configure(text=f"Acciones: {acciones}   Marcas: {marcas}")
+        self._t_grabacion += 1
+        if not self.grabador.activo():
+            self.lbl_aviso_grab.configure(text=(
+                "Windows dejó de entregar el ratón o el teclado. Pulsa Terminar y "
+                "revisa el registro."))
+        elif acciones == 0 and self._t_grabacion > 16:
+            self.lbl_aviso_grab.configure(text=(
+                "Mueve el ratón: el número debe subir. Si se queda en 0, el equipo "
+                "no deja grabar (seguridad o permisos)."))
+        else:
+            self.lbl_aviso_grab.configure(text="")
+        self.raiz.after(250, self._vigilar_grabacion)
 
     # ------------------------------------------------------------------
     # Archivos de macro
@@ -754,9 +821,18 @@ class App:
                 elif tipo == "marca":
                     self.log("  marca de captura")
                 elif tipo == "grabacion_fin":
+                    self._cerrar_indicador()
+                    self.grabador = None
+                    self._mostrar()
+                    if not dato["eventos"]:
+                        self.log("La grabación terminó vacía: no se registró ninguna acción. "
+                                 "Si moviste el ratón y el contador se quedó en 0, tu equipo "
+                                 "no permite leer el ratón y el teclado.")
+                        messagebox.showwarning("Grabar", "No se grabó ninguna acción.")
+                        self.lbl_estado.configure(text="Listo.")
+                        continue
                     self.macro = dato
                     self.ruta_macro = None
-                    self._mostrar()
                     self._actualizar_resumen()
                     self.log("Grabación terminada: " + macros.texto_resumen(dato)
                              + ". Guárdala con «Guardar macro…» si la quieres reutilizar.")
