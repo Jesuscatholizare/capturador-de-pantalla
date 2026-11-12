@@ -8,10 +8,10 @@ from dataclasses import asdict, fields
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from . import capturas, energia, estado, macro as macros, pdfs, teclas
+from . import capturas, energia, estado, macro as macros, ocr, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
@@ -81,6 +81,7 @@ class App:
         self.areas = []  # [[x, y, ancho, alto], ...]; vacía = pantalla completa
         self.v_por_pdf = S(value="30")
         self.v_pdf_al_final = B(value=True)
+        self.v_ocr = B(value=False)
         self.v_recapturar = S(value="")
 
     def _cargar_config(self):
@@ -92,7 +93,8 @@ class App:
             if clave in datos:
                 var.set(datos[clave])
         for clave, var in (("monitor", self.v_monitor),
-                           ("por_pdf", self.v_por_pdf), ("pdf_al_final", self.v_pdf_al_final)):
+                           ("por_pdf", self.v_por_pdf), ("pdf_al_final", self.v_pdf_al_final),
+                           ("ocr", self.v_ocr)):
             if clave in datos:
                 var.set(datos[clave])
         areas = datos.get("areas")
@@ -115,6 +117,7 @@ class App:
         datos = {k: v.get() for k, v in self.v.items()}
         datos.update(monitor=self.v_monitor.get(), areas=self.areas,
                      por_pdf=self.v_por_pdf.get(), pdf_al_final=self.v_pdf_al_final.get(),
+                     ocr=self.v_ocr.get(),
                      ruta_macro=self.ruta_macro)
         try:
             ARCHIVO_CONFIG.write_text(json.dumps(datos, ensure_ascii=False, indent=1),
@@ -277,10 +280,17 @@ class App:
         self._campo(p, 0, "Imágenes por PDF:", self.v_por_pdf)
         ttk.Checkbutton(p, text="Crear los PDF automáticamente al terminar",
                         variable=self.v_pdf_al_final).grid(row=1, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(p, text="Añadir OCR: texto buscable y copiable (OCR de Windows)",
+                        variable=self.v_ocr).grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Button(p, text="Comprobar OCR", command=self.comprobar_ocr).grid(row=2, column=2, sticky="w", padx=6)
+        ttk.Label(p, foreground="#555", wraplength=560, justify="left", text=(
+            "Con OCR, el PDF se ve igual pero lleva el texto debajo: puedes buscar con Ctrl+F y "
+            "copiar. Tarda un par de segundos más por página. «Comprobar OCR» reconoce la "
+            "última captura y te muestra el texto en el registro.")).grid(row=3, column=0, columnspan=3, sticky="w")
         ttk.Button(p, text="Crear PDF ahora con la carpeta…", command=self.crear_pdfs_ahora
-                   ).grid(row=2, column=0, sticky="w", pady=8)
+                   ).grid(row=4, column=0, sticky="w", pady=8)
         ttk.Label(p, foreground="#555", text="Se guardan en la subcarpeta PDF; el último lleva las que sobren."
-                  ).grid(row=3, column=0, columnspan=3, sticky="w")
+                  ).grid(row=5, column=0, columnspan=3, sticky="w")
 
         # Controles de ejecución
         ctl = ttk.LabelFrame(marco, text="Ejecución", padding=8)
@@ -507,7 +517,8 @@ class App:
 
     def _probar(self, funciones):
         try:
-            carpeta = Path(self.v["carpeta"].get())
+            # en una subcarpeta, para que la prueba no acabe dentro de los PDF
+            carpeta = Path(self.v["carpeta"].get()) / "_prueba"
             carpeta.mkdir(parents=True, exist_ok=True)
             lineas = []
             for i, captura in enumerate(funciones, start=1):
@@ -802,17 +813,76 @@ class App:
         except ValueError:
             messagebox.showerror("PDF", "«Imágenes por PDF» debe ser un número.")
             return
-        self.log(f"Creando PDF de {por_pdf} imágenes con {carpeta}…")
+        con_ocr = self.v_ocr.get()
+        self.log(f"Creando PDF de {por_pdf} imágenes con {carpeta}"
+                 + (" y OCR (puede tardar)…" if con_ocr else "…"))
 
         def trabajo():
+            reconocedor = None
+            if con_ocr:
+                try:
+                    reconocedor = ocr.Reconocedor()
+                    self.cola.put(("log", ocr.comprobar()))
+                except Exception as e:
+                    self.cola.put(("log", f"Sin OCR: {str(e).rstrip('.')}. Los PDF se crean solo con las imágenes."))
+                    reconocedor = None
+            fallos = []
+
+            def reconocer_pagina(img):
+                try:
+                    return reconocedor(img)
+                except Exception as e:  # una página mala no detiene los PDF
+                    fallos.append(str(e))
+                    return []
+
+            contador = {"n": 0}
+
+            def al_reconocer(ruta, palabras):
+                contador["n"] += 1
+                if contador["n"] % 10 == 0 or palabras == 0:
+                    aviso = " (sin texto)" if palabras == 0 else ""
+                    self.cola.put(("log", f"OCR: {contador['n']} páginas… {ruta.name}: "
+                                          f"{palabras} palabras{aviso}"))
+
             try:
                 with energia.mantener_despierto():
                     creados = pdfs.generar_pdfs(
                         carpeta, por_pdf,
-                        progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")))
+                        progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")),
+                        ocr=reconocer_pagina if reconocedor else None,
+                        al_reconocer=al_reconocer)
                 self.cola.put(("log", f"Listo: {len(creados)} PDF en {Path(creados[0]).parent}"))
+                if fallos:
+                    self.cola.put(("log", f"El OCR falló en {len(fallos)} página(s); esas van "
+                                          f"sin texto. Primer error: {fallos[0]}"))
             except Exception as e:
                 self.cola.put(("log", f"Error al crear los PDF: {e}"))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def comprobar_ocr(self):
+        carpeta = Path(self.v["carpeta"].get())
+        self.log("Comprobando el OCR de Windows…")
+
+        def trabajo():
+            try:
+                self.cola.put(("log", ocr.comprobar()))
+                candidatas = sorted((carpeta / "_prueba").glob("prueba*.png"),
+                                    key=lambda p: p.stat().st_mtime) if (carpeta / "_prueba").exists() else []
+                if not candidatas and carpeta.exists():
+                    candidatas = pdfs.listar_imagenes(carpeta)[-1:]
+                if not candidatas:
+                    self.cola.put(("log", "Haz «Probar una captura» (pestaña 3) para ver qué texto reconoce."))
+                    return
+                from PIL import Image
+                with Image.open(candidatas[-1]) as img:
+                    lineas = ocr.reconocer(img.convert("RGB"))
+                texto = "\n".join(" ".join(p[0] for p in l) for l in lineas)
+                palabras = sum(len(l) for l in lineas)
+                self.cola.put(("log", f"Texto reconocido en {candidatas[-1].name} ({palabras} palabras):"))
+                self.cola.put(("log", texto[:1500] if texto else "(no se reconoció texto)"))
+            except Exception as e:
+                self.cola.put(("log", f"OCR no disponible: {e}"))
 
         threading.Thread(target=trabajo, daemon=True).start()
 

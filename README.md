@@ -1,4 +1,4 @@
-# Capturador 1.4.0: graba, repite, captura y crea PDF
+# Capturador 1.5.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -69,7 +69,7 @@ Si también se bloquea así, pide al área de sistemas que autorice Python y las
   - Cada área se guarda como **imagen separada y en orden**: con dos áreas, `captura_00001` es el área 1, `captura_00002` el área 2, `captura_00003` otra vez el área 1… En el PDF quedan intercaladas igual, como las páginas izquierda y derecha de un libro abierto.
   - Las áreas quedan fijas para todas las vueltas, y el programa las recuerda para la próxima vez.
   - Sin áreas, se captura el monitor completo.
-- **Probar una captura** guarda `prueba.png` (o `prueba_area1.png`, `prueba_area2.png`…) para comprobar las zonas.
+- **Probar una captura** guarda `_prueba\prueba.png` (o `prueba_area1.png`, `prueba_area2.png`…) para comprobar las zonas. Va en la subcarpeta `_prueba`, así que no se mete en los PDF.
 - Con dos áreas, cada vuelta produce dos imágenes: **100 repeticiones = 200 imágenes**. La pestaña 2 muestra el total.
 
 ### 4. Si algo falla
@@ -112,6 +112,15 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 - Al terminar se crean solos en la subcarpeta `PDF`: `lote_001_paginas_00001-00030.pdf`, `lote_002_paginas_00031-00060.pdf`… El último lleva las que sobren.
 - **Crear PDF ahora con la carpeta…** sirve para cualquier carpeta de imágenes, aunque no las haya hecho este programa.
 
+### OCR: texto buscable y copiable
+- Marca **«Añadir OCR: texto buscable y copiable (OCR de Windows)»**. El PDF se ve igual, pero lleva el texto debajo de cada página: puedes **buscar con Ctrl+F**, **seleccionar y copiar**, y los lectores de pantalla lo pueden leer.
+- Usa el **OCR que trae Windows 10/11**: no hay que instalar ningún programa aparte. La primera vez que abres la versión nueva, `ejecutar_sin_compilar.bat` instala unas librerías pequeñas.
+- Reconoce los **idiomas instalados en Windows** (Configuración → Hora e idioma → Idioma). Si tu Windows está en español, ya está listo.
+- **Antes de un libro entero, pruébalo**: haz *Probar una captura* (pestaña 3) y pulsa **Comprobar OCR**. En el registro aparece el idioma y el texto que reconoció de esa captura.
+- Tarda un par de segundos más por página. Si el OCR falla en alguna página, esa página va sin texto y se avisa en el registro; los PDF se crean igual.
+- Si el OCR no está disponible (por ejemplo, porque la organización bloquea las librerías), el programa lo avisa y crea los PDF solo con las imágenes.
+- Calidad: muy buena en texto impreso normal. Peor en letra muy pequeña, tablas complejas, manuscritos o fotos inclinadas. Para mejorarla, que el área capturada muestre la página **lo más grande posible** (zoom del visor).
+
 ## Dejarlo trabajando de noche
 - Mientras trabaja (y mientras crea los PDF), el programa pide a Windows que **no se suspenda ni apague la pantalla**. Al terminar, o si se detiene, **el equipo vuelve a su configuración normal** y se suspenderá cuando le toque.
 - Lo que el programa **no** puede evitar:
@@ -127,6 +136,7 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 | `progreso.json` | Dónde va: permite reanudar |
 | `registro.csv` | Cada fallo, reintento y decisión, con fecha (se abre en Excel) |
 | `PDF\` | Los PDF por lotes |
+| `_prueba\` | Las capturas de prueba (no entran en los PDF) |
 
 ## Límites conocidos
 - La macro repite **posiciones de pantalla**. Si mueves la ventana, cambias la resolución o la escala de Windows entre la grabación y la reproducción, los clics caen en otro sitio. Graba con la ventana maximizada.
@@ -138,5 +148,6 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 - Las combinaciones que Windows reserva para sí (Ctrl+Alt+Supr, Win+L) no se pueden reproducir.
 
 ## Para desarrolladores
-- Código en `capturador/`: `grabador.py` (pynput), `reproductor.py`, `motor.py` (repeticiones, reintentos y progreso), `capturas.py` (mss y validación), `pdfs.py` (ReportLab), `app.py` (tkinter).
+- Código en `capturador/`: `grabador.py` (pynput), `reproductor.py`, `motor.py` (repeticiones, reintentos y progreso), `capturas.py` (mss y validación), `pdfs.py` (ReportLab, capa de texto invisible), `ocr.py` (Windows.Media.Ocr vía pywinrt), `energia.py` (evita la suspensión), `app.py` (tkinter).
+- `requirements-ocr.txt` es opcional: si no se instala, todo funciona salvo el OCR.
 - Pruebas: `python -m pytest pruebas`.

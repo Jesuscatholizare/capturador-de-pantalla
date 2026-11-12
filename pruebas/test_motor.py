@@ -360,3 +360,119 @@ def test_sin_la_opcion_la_blanca_detiene(tmp_path):
     m = Motor(macro_simple(), config(tmp_path, repeticiones=2, politica="detener",
                                      permitir_blancas=False), repro, lambda: pagina_blanca())
     assert m.ejecutar() == "detenido"
+
+
+def test_pdf_con_capa_de_texto_ocr(tmp_path):
+    """El texto «reconocido» se puede extraer del PDF y la página se ve igual."""
+    import shutil
+    import subprocess
+    if not shutil.which("pdftotext"):
+        pytest.skip("falta pdftotext")
+    for i in (1, 2, 3):
+        pagina(i, (600, 400)).save(tmp_path / f"captura_{i:05d}.png")
+
+    def ocr_falso(img):
+        return [[("Capítulo", 40, 30, 120, 24), ("primero:", 170, 30, 110, 24)],
+                [("la", 40, 80, 30, 24), ("niñez", 80, 80, 80, 24), ("«feliz»", 170, 80, 100, 24)]]
+
+    reconocidas = []
+    creados = pdfs.generar_pdfs(tmp_path, 2, ocr=ocr_falso,
+                                al_reconocer=lambda r, n: reconocidas.append((r.name, n)))
+    assert [p.name for p in creados] == ["lote_001_paginas_00001-00002.pdf",
+                                         "lote_002_paginas_00003-00003.pdf"]
+    assert reconocidas[0] == ("captura_00001.png", 5) and len(reconocidas) == 3
+    texto = subprocess.run(["pdftotext", "-layout", str(creados[0]), "-"],
+                           capture_output=True, text=True).stdout
+    assert "Capítulo primero:" in texto
+    assert "la niñez «feliz»" in texto
+    assert texto.count("Capítulo") == 2  # una vez por página
+    assert not list((tmp_path / "PDF").glob("*.tmp.pdf"))
+
+
+def test_listar_imagenes_ignora_subcarpetas(tmp_path):
+    pagina(1).save(tmp_path / "captura_00001.png")
+    (tmp_path / "_prueba").mkdir()
+    pagina(2).save(tmp_path / "_prueba" / "prueba.png")
+    assert [p.name for p in pdfs.listar_imagenes(tmp_path)] == ["captura_00001.png"]
+
+
+def test_ocr_de_windows_simulado(monkeypatch):
+    """Simula winrt: comprueba la ampliación ×2 y que las cajas vuelven al tamaño original."""
+    import types
+    from capturador import ocr
+
+    recibido = {}
+
+    class Rect:
+        def __init__(self, x, y, w, h):
+            self.x, self.y, self.width, self.height = x, y, w, h
+
+    class Palabra:
+        def __init__(self, t, r):
+            self.text, self.bounding_rect = t, r
+
+    class Linea:
+        def __init__(self, palabras):
+            self.words = palabras
+
+    class Operacion:
+        def __init__(self, r):
+            self.r = r
+
+        def get(self):
+            return self.r
+
+    class Motor:
+        recognizer_language = types.SimpleNamespace(display_name="Español (México)")
+
+        def recognize_async(self, bitmap):
+            recibido["tam"] = bitmap
+            return Operacion(types.SimpleNamespace(lines=[
+                Linea([Palabra("Hola", Rect(20, 40, 80, 30)), Palabra("mundo", Rect(110, 40, 100, 30))])]))
+
+    class OcrEngine:
+        max_image_dimension = 10000
+
+        @staticmethod
+        def try_create_from_user_profile_languages():
+            return Motor()
+
+    class DataWriter:
+        def write_bytes(self, b):
+            self.b = b
+
+        def detach_buffer(self):
+            return self.b
+
+    class SoftwareBitmap:
+        @staticmethod
+        def create_copy_from_buffer(buf, fmt, w, h):
+            assert len(buf) == w * h * 4 and fmt == "BGRA8"
+            return (w, h)
+
+    mods = {
+        "winrt": types.ModuleType("winrt"),
+        "winrt.runtime": types.SimpleNamespace(ApartmentType=types.SimpleNamespace(MULTI_THREADED=0),
+                                               init_apartment=lambda t: None),
+        "winrt.windows.globalization": types.SimpleNamespace(Language=lambda t: t),
+        "winrt.windows.graphics.imaging": types.SimpleNamespace(
+            BitmapAlphaMode=None, BitmapPixelFormat=types.SimpleNamespace(BGRA8="BGRA8"),
+            SoftwareBitmap=SoftwareBitmap),
+        "winrt.windows.media.ocr": types.SimpleNamespace(OcrEngine=OcrEngine),
+        "winrt.windows.storage.streams": types.SimpleNamespace(DataWriter=DataWriter),
+    }
+    for nombre, m in mods.items():
+        monkeypatch.setitem(sys.modules, nombre, m)
+    monkeypatch.setattr(ocr.sys, "platform", "win32")
+
+    lineas = ocr.Reconocedor()(Image.new("RGB", (800, 600), "white"))
+    assert recibido["tam"] == (1600, 1200)  # imagen pequeña: se amplía al doble
+    assert lineas == [[("Hola", 10, 20, 40, 15), ("mundo", 55, 20, 50, 15)]]
+
+
+def test_ocr_fuera_de_windows():
+    from capturador import ocr
+    if sys.platform == "win32":
+        pytest.skip("solo fuera de Windows")
+    with pytest.raises(ocr.OCRNoDisponible):
+        ocr.comprobar()

@@ -50,4 +50,7 @@ if not exist .venv\Scripts\python.exe (
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-exit /b %errorlevel%
+if errorlevel 1 exit /b 1
+python -m pip install -r requirements-ocr.txt
+if errorlevel 1 echo Aviso: no se pudo instalar el OCR de Windows. El programa funciona igual, sin OCR.
+exit /b 0
