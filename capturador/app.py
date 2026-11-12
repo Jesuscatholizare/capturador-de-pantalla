@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import capturas, estado, macro as macros, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
@@ -72,6 +72,7 @@ class App:
             "espera_reintento_ms": S(value="1500"),
             "rechazar_vacia": B(value=True),
             "rechazar_igual": B(value=True),
+            "permitir_blancas": B(value=True),
             "umbral_cambio": S(value="0.5"),
             "politica": S(value="preguntar"),
             "espera_reanudar_ms": S(value="1500"),
@@ -247,23 +248,28 @@ class App:
         # 4. Errores
         p = ttk.Frame(cuaderno, padding=10)
         cuaderno.add(p, text="4. Si algo falla")
-        ttk.Checkbutton(p, text="Rechazar imágenes vacías (todo negro, todo blanco…)",
-                        variable=self.v["rechazar_vacia"]).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(p, text="Puede haber páginas en blanco (aceptarlas sin detenerse)",
+                        variable=self.v["permitir_blancas"]).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(p, foreground="#555", text=(
+            "     Antes de aceptarla espera los reintentos, por si la página aún está cargando."
+        )).grid(row=1, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(p, text="Rechazar imágenes vacías (todo negro, todo de un color…)",
+                        variable=self.v["rechazar_vacia"]).grid(row=2, column=0, columnspan=3, sticky="w")
         ttk.Checkbutton(p, text="Rechazar si es igual a la anterior (la página no cambió)",
-                        variable=self.v["rechazar_igual"]).grid(row=1, column=0, columnspan=3, sticky="w")
-        self._campo(p, 2, "Mínimo que debe cambiar (% de píxeles):", self.v["umbral_cambio"])
-        self._campo(p, 3, "Reintentos de cada captura:", self.v["reintentos"])
-        self._campo(p, 4, "Espera entre reintentos (ms):", self.v["espera_reintento_ms"])
-        self._campo(p, 5, "Margen al reanudar (ms):", self.v["espera_reanudar_ms"])
-        ttk.Label(p, text="Si después de reintentar sigue fallando:").grid(row=6, column=0, sticky="nw", pady=(6, 0))
+                        variable=self.v["rechazar_igual"]).grid(row=3, column=0, columnspan=3, sticky="w")
+        self._campo(p, 4, "Mínimo que debe cambiar (% de píxeles):", self.v["umbral_cambio"])
+        self._campo(p, 5, "Reintentos de cada captura:", self.v["reintentos"])
+        self._campo(p, 6, "Espera entre reintentos (ms):", self.v["espera_reintento_ms"])
+        self._campo(p, 7, "Margen al reanudar (ms):", self.v["espera_reanudar_ms"])
+        ttk.Label(p, text="Si después de reintentar sigue fallando:").grid(row=8, column=0, sticky="nw", pady=(6, 0))
         caja = ttk.Frame(p)
-        caja.grid(row=6, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        caja.grid(row=8, column=1, columnspan=2, sticky="w", pady=(6, 0))
         for texto, valor in POLITICAS:
             ttk.Radiobutton(caja, text=texto, value=valor, variable=self.v["politica"]).pack(anchor="w")
         ttk.Label(p, foreground="#555", wraplength=560, justify="left", text=(
             "Todo fallo queda en registro.csv y el avance en progreso.json, dentro de la carpeta. "
             "Si se detiene en la captura 154, «Continuar donde se quedó» empieza en la 154 sin "
-            "tocar las anteriores.")).grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+            "tocar las anteriores.")).grid(row=9, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
         # 5. PDF
         p = ttk.Frame(cuaderno, padding=10)
@@ -721,6 +727,9 @@ class App:
                 return
             self.barra.configure(value=d["numero"])
             extra = f" (intento {d['intento']})" if d["intento"] not in (1, "aviso") else ""
+            if d.get("blanca"):
+                extra = " — página en blanco"
+                self.log(f"Captura {d['numero']}: página en blanco, aceptada")
             if d["intento"] == "aviso":
                 extra = f" — guardada con aviso: {d.get('aviso')}"
                 self.log(f"Captura {d['numero']}{extra}")

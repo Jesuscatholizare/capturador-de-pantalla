@@ -38,6 +38,26 @@ def porcentaje_cambio(img, previa):
     return 100.0 * distintos / total
 
 
+def es_pagina_en_blanco(img, proporcion=0.98, brillo_minimo=150):
+    """True si la imagen es una página en blanco: clara y casi uniforme.
+
+    Admite un número de página o una cabecera pequeña (hasta un 2 % de píxeles
+    distintos). Una imagen oscura (pantalla bloqueada o apagada) no cuenta.
+    """
+    hist = _reducida(img).histogram()
+    total = sum(hist)
+    acumulado, mediana = 0, 0
+    for valor, n in enumerate(hist):
+        acumulado += n
+        if acumulado * 2 >= total:
+            mediana = valor
+            break
+    if mediana < brillo_minimo:
+        return False
+    cerca = sum(hist[max(0, mediana - 24):mediana + 25])
+    return cerca / total >= proporcion
+
+
 def motivo_rechazo(img, previa=None, rechazar_vacia=True,
                    rechazar_igual=True, umbral_cambio=0.5):
     """Devuelve None si la imagen es aceptable o un texto con el motivo."""

@@ -33,6 +33,7 @@ class Config:
     espera_reintento_ms: int = 1500
     rechazar_vacia: bool = True
     rechazar_igual: bool = True
+    permitir_blancas: bool = True  # puede haber páginas en blanco: aceptarlas
     umbral_cambio: float = 0.5     # % mínimo de píxeles que deben cambiar
     politica: str = "preguntar"    # preguntar | guardar | detener
     espera_reanudar_ms: int = 1500  # margen tras cerrar un aviso o reanudar
@@ -187,6 +188,18 @@ class Motor:
                     img, motivo = None, f"error al capturar: {e}"
                 else:
                     ultima_img = img
+                    if cfg.permitir_blancas and capturas.es_pagina_en_blanco(img):
+                        # Puede ser una página en blanco de verdad o una que aún
+                        # no ha cargado: se espera con los reintentos y, si
+                        # sigue en blanco, se acepta sin detenerse.
+                        if intento <= cfg.reintentos:
+                            self._esperar(cfg.espera_reintento_ms / 1000, pausable=False)
+                            continue
+                        self._guardar_imagen(numero, img, manual)
+                        self._registrar(numero, intento, "página en blanco aceptada")
+                        self.notificar("captura", numero=numero, intento=intento,
+                                       manual=manual, blanca=True)
+                        return
                     motivo = capturas.motivo_rechazo(
                         img, previa, cfg.rechazar_vacia,
                         cfg.rechazar_igual and not manual, cfg.umbral_cambio)

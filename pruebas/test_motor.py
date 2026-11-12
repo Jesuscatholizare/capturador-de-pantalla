@@ -310,3 +310,53 @@ def test_modo_inicio_captura_antes_de_las_acciones(tmp_path):
     assert vistos == [0, 2, 4]          # la primera, sin haber pulsado nada
     assert len(repro.ejecutados) == 4   # la última vuelta no pasa de página
     assert len(archivos(tmp_path)) == 3
+
+
+def pagina_blanca(numero_de_pagina=False):
+    img = Image.new("RGB", (400, 300), (250, 248, 240))
+    if numero_de_pagina:
+        ImageDraw.Draw(img).rectangle([190, 280, 205, 290], fill="black")
+    return img
+
+
+def test_paginas_en_blanco_se_aceptan_sin_detenerse(tmp_path):
+    """Entre capítulos: una página en blanco y luego otra (con número de página)."""
+    repro = ReproFalso()
+    llamadas = []
+
+    def captura():
+        llamadas.append(len(repro.ejecutados))
+        vuelta = len(repro.ejecutados) // 2
+        if vuelta == 1:
+            return pagina_blanca()
+        if vuelta == 2:
+            return pagina_blanca(numero_de_pagina=True)
+        return pagina(vuelta)
+
+    preguntas = []
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=4, modo="inicio"),
+              repro, captura, preguntar=lambda d: preguntas.append(d) or "detener")
+    assert m.ejecutar() == "completado"
+    assert preguntas == []
+    assert len(archivos(tmp_path)) == 4
+    registro = (Path(tmp_path) / "registro.csv").read_text(encoding="utf-8-sig")
+    assert registro.count("página en blanco aceptada") == 2
+    # cada blanca se reintentó antes de aceptarla (por si estaba cargando)
+    assert len(llamadas) == 1 + 3 + 3 + 1
+
+
+def test_pantalla_negra_sigue_siendo_error(tmp_path):
+    repro = ReproFalso()
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=2, politica="detener"), repro,
+              lambda: Image.new("RGB", (400, 300), "black"))
+    assert m.ejecutar() == "detenido"
+    assert capturas.es_pagina_en_blanco(pagina_blanca(True))
+    assert not capturas.es_pagina_en_blanco(Image.new("RGB", (400, 300), "black"))
+    assert not capturas.es_pagina_en_blanco(pagina(3))
+
+
+def test_sin_la_opcion_la_blanca_detiene(tmp_path):
+    repro = ReproFalso()
+    m = Motor(macro_simple(), config(tmp_path, repeticiones=2, politica="detener",
+                                     permitir_blancas=False), repro, lambda: pagina_blanca())
+    assert m.ejecutar() == "detenido"

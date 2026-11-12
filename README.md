@@ -1,4 +1,4 @@
-# Capturador 1.2.0: graba, repite, captura y crea PDF
+# Capturador 1.3.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -73,6 +73,11 @@ Si también se bloquea así, pide al área de sistemas que autorice Python y las
 - Con dos áreas, cada vuelta produce dos imágenes: **100 repeticiones = 200 imágenes**. La pestaña 2 muestra el total.
 
 ### 4. Si algo falla
+**Puede haber páginas en blanco** (activada por defecto). Entre capítulos suele haber páginas en blanco: con esta opción el programa **no se detiene**. Cuando ve una página en blanco espera los reintentos, por si la página aún está cargando. Si sigue en blanco, la guarda como una página más y lo anota en `registro.csv` («página en blanco aceptada»).
+- Cuenta como página en blanco una imagen **clara y casi uniforme**, aunque lleve el número de página o una cabecera pequeña.
+- Dos páginas en blanco seguidas también se aceptan.
+- Una imagen **negra** (pantalla bloqueada o apagada) se sigue tratando como error.
+
 Cada captura se comprueba antes de guardarla:
 - **Imagen vacía**: toda negra o toda blanca, porque la pantalla estaba bloqueada o la página no había cargado.
 - **Igual a la anterior**: la página no cambió, porque el clic no hizo efecto o el visor tardó.
