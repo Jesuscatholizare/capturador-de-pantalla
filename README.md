@@ -26,6 +26,13 @@ Este programa graba lo que haces con el ratón y el teclado, lo repite las veces
 - Puedes copiar ese archivo al Escritorio o a una memoria USB: funciona solo, sin el resto de la carpeta.
 - Si el antivirus lo bloquea, es porque el programa controla el teclado y el ratón y no lleva firma digital. Puedes permitirlo, o abrir el programa con **`ejecutar_sin_compilar.bat`**, que hace lo mismo sin crear el `.exe`.
 
+### Si tu equipo no deja crear o abrir el `.exe` (Device Guard)
+En equipos de una empresa o institución puede aparecer: *«…ha sido bloqueado por la directiva de Device Guard de su organización»*. Es una regla de seguridad del área de sistemas que solo deja ejecutar programas aprobados. **No intentes saltarla.**
+
+El programa funciona igual sin `.exe`: haz doble clic en **`ejecutar_sin_compilar.bat`**. La primera vez instala lo necesario (unos minutos); después se abre directamente. Deja abierta la ventana negra mientras usas el Capturador.
+
+Si también se bloquea así, pide al área de sistemas que autorice Python y las librerías de `requirements.txt`.
+
 ### 5. Primera prueba
 1. En la pestaña **3. Imágenes**, elige la carpeta donde se guardarán las capturas y pulsa **Probar una captura**.
 2. En **1. Grabar**, pulsa **● Grabar** y haz un clic en «página siguiente» de cualquier documento. Luego pulsa **F9** para terminar.
