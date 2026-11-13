@@ -476,3 +476,77 @@ def test_ocr_fuera_de_windows():
         pytest.skip("solo fuera de Windows")
     with pytest.raises(ocr.OCRNoDisponible):
         ocr.comprobar()
+
+
+def pagina_realista(n, size=(1000, 1400)):
+    """Página de libro con textura de papel (como un escaneo): pesa mucho en PNG."""
+    from PIL import ImageFilter
+    w, h = size
+    base = Image.effect_noise(size, 10).convert("L").point(lambda v: 236 + (v - 128) // 8)
+    img = Image.merge("RGB", (base, base, base.point(lambda v: v - 10)))
+    d = ImageDraw.Draw(img)
+    for i in range(28):
+        y = 90 + i * 44
+        x = 80 + (n * 13 + i * 7) % 40
+        d.rectangle([x, y, x + 600 + (n * 31 + i * 17) % 220, y + 14], fill=(30, 28, 26))
+    return img.filter(ImageFilter.GaussianBlur(0.6))
+
+
+def _carpeta_realista(tmp_path, n=30):
+    for i in range(1, n + 1):
+        pagina_realista(i).save(tmp_path / f"captura_{i:05d}.png")
+
+
+def test_pdf_comprimido_cabe_en_el_limite(tmp_path):
+    _carpeta_realista(tmp_path)
+    original = pdfs.generar_pdfs(tmp_path, 30, destino=tmp_path / "orig")[0].stat().st_size
+    avisos = []
+    pdf = pdfs.generar_pdfs(tmp_path, 30, destino=tmp_path / "comp", formato="comprimido",
+                            max_mb=2, aviso=avisos.append)[0]
+    assert original > 10 * 1024 * 1024        # sin comprimir, más de 10 MB
+    assert pdf.stat().st_size <= 2 * 1024 * 1024
+    assert avisos == []
+
+
+def test_pdf_comprimido_con_ocr_conserva_el_texto(tmp_path):
+    import shutil
+    import subprocess
+    if not shutil.which("pdftotext"):
+        pytest.skip("falta pdftotext")
+    _carpeta_realista(tmp_path, 6)
+    pdf = pdfs.generar_pdfs(tmp_path, 30, formato="comprimido", max_mb=0.5, gris=True,
+                            ocr=lambda img: [[("Capítulo", 80, 90, 200, 30)]])[0]
+    assert pdf.stat().st_size <= 0.5 * 1024 * 1024
+    texto = subprocess.run(["pdftotext", str(pdf), "-"], capture_output=True, text=True).stdout
+    assert texto.count("Capítulo") == 6
+
+
+def test_pdf_blanco_y_negro_es_ligero(tmp_path):
+    _carpeta_realista(tmp_path, 10)
+    byn = pdfs.generar_pdfs(tmp_path, 30, formato="byn")[0].stat().st_size
+    assert byn < 10 * 150 * 1024  # menos de 150 KB por página
+
+
+def test_pdf_solo_texto_y_txt(tmp_path):
+    import shutil
+    import subprocess
+    _carpeta_realista(tmp_path, 3)
+    ocr = lambda img: [[("La", 0, 0, 10, 10), ("niñez", 12, 0, 30, 10)], [("«feliz»", 0, 20, 40, 10)]]
+    with pytest.raises(ValueError):
+        pdfs.generar_pdfs(tmp_path, 30, formato="texto")  # sin OCR no se puede
+    pdf = pdfs.generar_pdfs(tmp_path, 2, formato="texto", ocr=ocr)
+    assert [p.name for p in pdf] == ["lote_001_paginas_00001-00002.pdf",
+                                     "lote_002_paginas_00003-00003.pdf"]
+    assert pdf[0].stat().st_size < 60 * 1024
+    txt = pdf[1].with_suffix(".txt").read_text(encoding="utf-8")
+    assert "===== Página 3 (captura_00003.png) =====" in txt and "La niñez\n«feliz»" in txt
+    if shutil.which("pdftotext"):
+        t = subprocess.run(["pdftotext", str(pdf[0]), "-"], capture_output=True, text=True).stdout
+        assert t.count("La niñez") == 2 and "Página 2" in t
+
+
+def test_aviso_si_no_cabe(tmp_path):
+    _carpeta_realista(tmp_path, 5)
+    avisos = []
+    pdfs.generar_pdfs(tmp_path, 30, formato="original", max_mb=0.1, aviso=avisos.append)
+    assert avisos and "no cabe en 0.1 MB" in avisos[0]

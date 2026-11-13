@@ -1,4 +1,4 @@
-# Capturador 1.5.0: graba, repite, captura y crea PDF
+# Capturador 1.6.0: graba, repite, captura y crea PDF
 
 Este programa graba lo que haces con el ratón y el teclado, lo repite las veces que le indiques, toma una captura de pantalla en cada vuelta y al final junta las imágenes en PDF de 30 páginas.
 
@@ -111,6 +111,21 @@ Si la captura falla, el programa **espera y reintenta** (3 veces por defecto). S
 - **Imágenes por PDF**: 30 por defecto.
 - Al terminar se crean solos en la subcarpeta `PDF`: `lote_001_paginas_00001-00030.pdf`, `lote_002_paginas_00031-00060.pdf`… El último lleva las que sobren.
 - **Crear PDF ahora con la carpeta…** sirve para cualquier carpeta de imágenes, aunque no las haya hecho este programa.
+
+### Peso de los PDF
+Las capturas sin comprimir pesan mucho: unos 2 MB por página con papel texturizado (60 páginas ≈ 100 MB). En **Peso de los PDF** eliges:
+
+| Opción | 60 páginas (prueba con páginas de libro) | Para qué |
+|---|---|---|
+| **Comprimido, máximo N MB por PDF** (por defecto: 5 MB) | ≈ 4 MB con máximo 5; ≈ 9 MB con máximo 10 | Lo normal. Ajusta la compresión **página a página** hasta que cada PDF quepa en el máximo. Con «escala de grises» quita el color. |
+| **Blanco y negro** | ≈ 5 MB | Libros de solo texto: el texto queda muy nítido; las fotos y los grises se pierden. |
+| **Solo texto, sin imágenes** | ≈ 0,1 MB | Usa el OCR y crea un PDF con solo el texto (una página por captura) y además un **.txt**. Ideal para subirlo a Drive y trabajarlo con Claude. |
+| **Máxima calidad** | ≈ 100 MB | Sin pérdida, por si necesitas la imagen perfecta. |
+
+- Si un PDF no cabe en el máximo ni con la compresión más fuerte, el registro lo avisa y sugiere qué cambiar: escala de grises, blanco y negro o menos imágenes por PDF.
+- El peso de cada PDF aparece en el registro al crearlo.
+- El OCR se hace **sobre la captura original, antes de comprimir**, así que comprimir no empeora el texto reconocido.
+- **Puedes rehacer los PDF con otro peso cuando quieras**: las imágenes siguen en la carpeta. Elige el formato y pulsa **Crear PDF ahora con la carpeta…**. Los PDF anteriores con el mismo nombre se reemplazan.
 
 ### OCR: texto buscable y copiable
 - Marca **«Añadir OCR: texto buscable y copiable (OCR de Windows)»**. El PDF se ve igual, pero lleva el texto debajo de cada página: puedes **buscar con Ctrl+F**, **seleccionar y copiar**, y los lectores de pantalla lo pueden leer.

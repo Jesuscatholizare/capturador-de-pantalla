@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 from . import capturas, energia, estado, macro as macros, ocr, pdfs, teclas
 from .motor import Config, Motor, capturas_por_repeticion
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 ARCHIVO_CONFIG = Path.home() / "capturador_config.json"
 CUENTA_ATRAS = 3
 
@@ -82,6 +82,9 @@ class App:
         self.v_por_pdf = S(value="30")
         self.v_pdf_al_final = B(value=True)
         self.v_ocr = B(value=False)
+        self.v_formato_pdf = S(value="comprimido")
+        self.v_max_mb = S(value="5")
+        self.v_gris = B(value=False)
         self.v_recapturar = S(value="")
 
     def _cargar_config(self):
@@ -94,7 +97,8 @@ class App:
                 var.set(datos[clave])
         for clave, var in (("monitor", self.v_monitor),
                            ("por_pdf", self.v_por_pdf), ("pdf_al_final", self.v_pdf_al_final),
-                           ("ocr", self.v_ocr)):
+                           ("ocr", self.v_ocr), ("formato_pdf", self.v_formato_pdf),
+                           ("max_mb", self.v_max_mb), ("gris", self.v_gris)):
             if clave in datos:
                 var.set(datos[clave])
         areas = datos.get("areas")
@@ -117,7 +121,8 @@ class App:
         datos = {k: v.get() for k, v in self.v.items()}
         datos.update(monitor=self.v_monitor.get(), areas=self.areas,
                      por_pdf=self.v_por_pdf.get(), pdf_al_final=self.v_pdf_al_final.get(),
-                     ocr=self.v_ocr.get(),
+                     ocr=self.v_ocr.get(), formato_pdf=self.v_formato_pdf.get(),
+                     max_mb=self.v_max_mb.get(), gris=self.v_gris.get(),
                      ruta_macro=self.ruta_macro)
         try:
             ARCHIVO_CONFIG.write_text(json.dumps(datos, ensure_ascii=False, indent=1),
@@ -280,17 +285,36 @@ class App:
         self._campo(p, 0, "Imágenes por PDF:", self.v_por_pdf)
         ttk.Checkbutton(p, text="Crear los PDF automáticamente al terminar",
                         variable=self.v_pdf_al_final).grid(row=1, column=0, columnspan=3, sticky="w")
-        ttk.Checkbutton(p, text="Añadir OCR: texto buscable y copiable (OCR de Windows)",
-                        variable=self.v_ocr).grid(row=2, column=0, columnspan=2, sticky="w")
-        ttk.Button(p, text="Comprobar OCR", command=self.comprobar_ocr).grid(row=2, column=2, sticky="w", padx=6)
+        fila_ocr = ttk.Frame(p)
+        fila_ocr.grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Checkbutton(fila_ocr, text="Añadir OCR: texto buscable y copiable",
+                        variable=self.v_ocr).pack(side="left")
+        ttk.Button(fila_ocr, text="Comprobar OCR", command=self.comprobar_ocr).pack(side="left", padx=8)
         ttk.Label(p, foreground="#555", wraplength=560, justify="left", text=(
             "Con OCR, el PDF se ve igual pero lleva el texto debajo: puedes buscar con Ctrl+F y "
             "copiar. Tarda un par de segundos más por página. «Comprobar OCR» reconoce la "
             "última captura y te muestra el texto en el registro.")).grid(row=3, column=0, columnspan=3, sticky="w")
+        peso = ttk.LabelFrame(p, text="Peso de los PDF", padding=6)
+        peso.grid(row=4, column=0, columnspan=3, sticky="we", pady=(8, 0))
+        fila_comp = ttk.Frame(peso)
+        fila_comp.pack(anchor="w")
+        ttk.Radiobutton(fila_comp, text="Comprimido, máximo", value="comprimido",
+                        variable=self.v_formato_pdf).pack(side="left")
+        ttk.Entry(fila_comp, textvariable=self.v_max_mb, width=5).pack(side="left", padx=4)
+        ttk.Label(fila_comp, text="MB por PDF").pack(side="left")
+        ttk.Checkbutton(fila_comp, text="en escala de grises",
+                        variable=self.v_gris).pack(side="left", padx=(12, 0))
+        for texto, valor in [
+                ("Blanco y negro: muy ligero y nítido (las fotos se pierden)", "byn"),
+                ("Solo texto, sin imágenes (usa el OCR y crea un .txt): el más ligero", "texto"),
+                ("Máxima calidad, sin compresión (unos 2 MB por página)", "original")]:
+            ttk.Radiobutton(peso, text=texto, value=valor, variable=self.v_formato_pdf).pack(anchor="w")
         ttk.Button(p, text="Crear PDF ahora con la carpeta…", command=self.crear_pdfs_ahora
-                   ).grid(row=4, column=0, sticky="w", pady=8)
-        ttk.Label(p, foreground="#555", text="Se guardan en la subcarpeta PDF; el último lleva las que sobren."
-                  ).grid(row=5, column=0, columnspan=3, sticky="w")
+                   ).grid(row=5, column=0, sticky="w", pady=8)
+        ttk.Label(p, foreground="#555", text=(
+            "Se guardan en la subcarpeta PDF; el último lleva las que sobren. Puedes rehacerlos "
+            "con otro peso: las imágenes siguen en la carpeta."), wraplength=560, justify="left"
+                  ).grid(row=6, column=0, columnspan=3, sticky="w")
 
         # Controles de ejecución
         ctl = ttk.LabelFrame(marco, text="Ejecución", padding=8)
@@ -813,8 +837,21 @@ class App:
         except ValueError:
             messagebox.showerror("PDF", "«Imágenes por PDF» debe ser un número.")
             return
-        con_ocr = self.v_ocr.get()
-        self.log(f"Creando PDF de {por_pdf} imágenes con {carpeta}"
+        formato = self.v_formato_pdf.get()
+        max_mb = None
+        if formato in ("comprimido", "byn", "original"):
+            try:
+                max_mb = float(self.v_max_mb.get().replace(",", ".")) if self.v_max_mb.get().strip() else None
+                if max_mb is not None and max_mb <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("PDF", "El máximo de MB por PDF debe ser un número mayor que 0.")
+                return
+        gris = self.v_gris.get()
+        con_ocr = self.v_ocr.get() or formato == "texto"  # «solo texto» necesita el OCR
+        nombres = {"comprimido": f"comprimidos (máx. {max_mb:g} MB)" if max_mb else "comprimidos",
+                   "byn": "en blanco y negro", "texto": "de solo texto", "original": "sin compresión"}
+        self.log(f"Creando PDF {nombres[formato]} de {por_pdf} imágenes con {carpeta}"
                  + (" y OCR (puede tardar)…" if con_ocr else "…"))
 
         def trabajo():
@@ -824,8 +861,12 @@ class App:
                     reconocedor = ocr.Reconocedor()
                     self.cola.put(("log", ocr.comprobar()))
                 except Exception as e:
-                    self.cola.put(("log", f"Sin OCR: {str(e).rstrip('.')}. Los PDF se crean solo con las imágenes."))
                     reconocedor = None
+                    if formato == "texto":
+                        self.cola.put(("log", f"No se pueden crear PDF de solo texto sin OCR: "
+                                              f"{str(e).rstrip('.')}. Elige otro formato en la pestaña 5."))
+                        return
+                    self.cola.put(("log", f"Sin OCR: {str(e).rstrip('.')}. Los PDF se crean solo con las imágenes."))
             fallos = []
 
             def reconocer_pagina(img):
@@ -848,9 +889,11 @@ class App:
                 with energia.mantener_despierto():
                     creados = pdfs.generar_pdfs(
                         carpeta, por_pdf,
-                        progreso=lambda n, t, a: self.cola.put(("log", f"PDF {n}/{t}: {a.name}")),
+                        progreso=lambda n, t, a: self.cola.put((
+                            "log", f"PDF {n}/{t}: {a.name} ({a.stat().st_size / 1048576:.1f} MB)")),
                         ocr=reconocer_pagina if reconocedor else None,
-                        al_reconocer=al_reconocer)
+                        al_reconocer=al_reconocer, formato=formato, max_mb=max_mb, gris=gris,
+                        aviso=lambda texto: self.cola.put(("log", "Aviso: " + texto)))
                 self.cola.put(("log", f"Listo: {len(creados)} PDF en {Path(creados[0]).parent}"))
                 if fallos:
                     self.cola.put(("log", f"El OCR falló en {len(fallos)} página(s); esas van "
